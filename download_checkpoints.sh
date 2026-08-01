@@ -20,8 +20,8 @@ fetch () {  # fetch <url> <dest>
   curl -fL "$url" -o "$dest"
 }
 
-# CheMeleon foundation (~34 MB) — chemprop CheMeleon release asset
-fetch "TODO" "$CHEMELEON_HOME/.chemprop/chemeleon_mp.pt"
+# CheMeleon foundation (~34 MB) — Zenodo (JacksonBurns/chemeleon)
+fetch "https://zenodo.org/records/15460715/files/chemeleon_mp.pt" "$CHEMELEON_HOME/.chemprop/chemeleon_mp.pt"
 
 # MolFCL pretrained (~12 MB) — MolFCL repo
 fetch "TODO" "$MOLFCL_DIR/ckpt/original_MoleculeModel.pkl"
@@ -29,7 +29,10 @@ fetch "TODO" "$MOLFCL_DIR/ckpt/original_MoleculeModel.pkl"
 # MotiL pretrained (~7 MB) — MotiL repo
 fetch "TODO" "$MOTIL_DIR/dumped/pre-train/1-model/original_CMPN_0707_0800_12000th_epoch.pkl"
 
-# MoLFormer pretrained (~562 MB, this ONE checkpoint — not the full checkpoints dir) — IBM MoLFormer release / HuggingFace
-fetch "TODO" "$MOLFORMER_DIR/Pretrained MoLFormer/checkpoints/N-Step-Checkpoint_3_30000.ckpt"
+# MoLFormer pretrained (~562 MB, this ONE checkpoint) — originally from IBM Box:
+#   https://ibm.box.com/v/MoLFormer-data  ->  "Pretrained MoLFormer/checkpoints/N-Step-Checkpoint_3_30000.ckpt"
+#   Box needs a manual/browser download. EASIEST FOR USERS: re-host this one file on Zenodo/HF and
+#   put the direct URL below (replace REHOST_URL).
+fetch "REHOST_URL" "$MOLFORMER_DIR/Pretrained MoLFormer/checkpoints/N-Step-Checkpoint_3_30000.ckpt"
 
 echo "done — any 'set the URL' lines above still need the canonical source filled in."
