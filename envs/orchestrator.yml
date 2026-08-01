@@ -1,0 +1,16 @@
+# Minimal environment that RUNS the orchestration (run_benchmark / run_phase),
+# prepares user data (prepare_user_data.py), and collects/plots results
+# (collect_results.py). It does NOT train models — each method trains in its own
+# env (chemprop2 / molclr / molfcl / molformer). Replaces the old heavyweight
+# "foldeverything" env, which carried Boltz-specific deps not needed here.
+name: orchestrator
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy
+  - pandas
+  - scikit-learn
+  - scipy
+  - rdkit
+  - matplotlib

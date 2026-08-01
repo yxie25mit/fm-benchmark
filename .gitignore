@@ -19,5 +19,10 @@ foundation_model_*
 # transient user-prepared / smoke-test datasets
 cleaned/user_*
 cleaned/e2e_*
+cleaned/orchtest*
 splits/user_*
 splits/e2e_*
+splits/orchtest*
+
+# superseded heavyweight orchestration env (replaced by orchestrator.yml)
+envs/foldeverything.yml

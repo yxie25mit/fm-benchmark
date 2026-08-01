@@ -9,8 +9,8 @@ current cluster paths as defaults, so nothing breaks in place.
 ## 1. Conda environments — you need SEVERAL, not one
 
 A single env will **not** work: `molclr` and `molformer` pin torch 1.7.1 / CUDA 11.0, which is
-incompatible with the modern chemprop-v2 env. (The orchestration runs under `foldeverything`, but
-each method is launched with its own env's python — that's why "just foldeverything" only appears
+incompatible with the modern chemprop-v2 env. (The orchestration runs under the lightweight
+`orchestrator` env, but each method is launched with its own env's python — that's why one env only appears
 to work for the chemprop-family methods.)
 
 | env | used by | key deps |
@@ -19,14 +19,14 @@ to work for the chemprop-family methods.)
 | `molclr` | molclr | torch 1.7.1+cu110, torch_geometric 1.6.3 |
 | `molfcl` | molfcl, motil | chemprop v1 fork |
 | `molformer` | molformer | torch 1.7.1, pytorch-lightning, apex |
-| `foldeverything` | orchestration only (run_benchmark/run_phase) | rdkit, pandas, numpy |
+| `orchestrator` | orchestration + prepare_user_data + collect_results (no GPU/torch) | rdkit, pandas, numpy, sklearn, scipy, matplotlib |
 
 Export each on this machine, recreate on the new one:
 ```bash
 mkdir -p envs
-for e in chemprop2 molclr molfcl molformer foldeverything; do conda env export -n $e > envs/$e.yml; done
+for e in chemprop2 molclr molfcl molformer; do conda env export -n $e > envs/$e.yml; done  # orchestrator.yml is hand-maintained
 # on the new machine:
-for e in chemprop2 molclr molfcl molformer foldeverything; do conda env create -f envs/$e.yml; done
+for e in orchestrator chemprop2 molclr molfcl molformer; do conda env create -f envs/$e.yml; done
 export PIPELINE_CONDA_ENVS=/path/to/your/conda/envs   # if not ~/anaconda3/envs
 ```
 (cu110 wheels for molclr/molformer may need `--no-deps` + the matching pip wheels; keep the
