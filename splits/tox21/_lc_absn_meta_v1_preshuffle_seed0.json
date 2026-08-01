@@ -1,0 +1,40 @@
+{
+  "dataset": "tox21",
+  "base_protocol": "v1_preshuffle",
+  "outer_seed": 0,
+  "mode": "absolute_n",
+  "task_type": "cls",
+  "n_targets": 12,
+  "n_train_full": 5805,
+  "points": {
+    "n00100": {
+      "target_n": 100,
+      "n_train": 100
+    },
+    "n00250": {
+      "target_n": 250,
+      "n_train": 250
+    },
+    "n00500": {
+      "target_n": 500,
+      "n_train": 500
+    },
+    "n01000": {
+      "target_n": 1000,
+      "n_train": 1000
+    },
+    "n02500": {
+      "target_n": 2500,
+      "n_train": 2500
+    },
+    "n05000": {
+      "target_n": 5000,
+      "n_train": 5000
+    },
+    "n_full": {
+      "target_n": 5805,
+      "n_train": 5805,
+      "reuse_split": "v1_preshuffle_seed0"
+    }
+  }
+}

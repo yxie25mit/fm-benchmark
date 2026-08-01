@@ -1,0 +1,15 @@
+{
+  "dataset": "tdc_cyp3a4_substrate_carbonmangels",
+  "task_type": "cls",
+  "target_columns": [
+    "Y"
+  ],
+  "n_targets": 1,
+  "metric": "roc-auc",
+  "source": "tdc",
+  "tdc_name": "cyp3a4_substrate_carbonmangels",
+  "n_after": 670,
+  "n_train_val": 535,
+  "n_test": 135,
+  "cleaning": "none (rows kept verbatim to match TDC leaderboard split)"
+}

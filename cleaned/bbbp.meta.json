@@ -1,0 +1,25 @@
+{
+  "dataset": "bbbp",
+  "task_type": "cls",
+  "raw_path": "/data/rbg/users/yxie25/molclr_chemprop/MolFCL/data/ours_bbbp.csv",
+  "raw_rows": 2038,
+  "n_targets": 1,
+  "target_columns": [
+    "p_np"
+  ],
+  "n_dropped_invalid_smiles": 0,
+  "n_unique_canonical_smiles": 1974,
+  "n_duplicate_groups": 60,
+  "n_duplicate_source_rows_collapsed": 64,
+  "per_target_dedup": {
+    "p_np": {
+      "groups_same": 50,
+      "groups_conflict": 10
+    }
+  },
+  "regression_dup_tolerance": null,
+  "n_dropped_all_nan_after_dedup": 10,
+  "n_after": 1964,
+  "rdkit_version": "n/a",
+  "git_sha": "3d3bc1912be27b0c97435fd9134f4d4c73d4c5ab"
+}

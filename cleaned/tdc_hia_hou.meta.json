@@ -1,0 +1,15 @@
+{
+  "dataset": "tdc_hia_hou",
+  "task_type": "cls",
+  "target_columns": [
+    "Y"
+  ],
+  "n_targets": 1,
+  "metric": "roc-auc",
+  "source": "tdc",
+  "tdc_name": "hia_hou",
+  "n_after": 578,
+  "n_train_val": 461,
+  "n_test": 117,
+  "cleaning": "none (rows kept verbatim to match TDC leaderboard split)"
+}

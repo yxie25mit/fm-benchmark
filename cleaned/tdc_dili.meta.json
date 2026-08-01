@@ -1,0 +1,15 @@
+{
+  "dataset": "tdc_dili",
+  "task_type": "cls",
+  "target_columns": [
+    "Y"
+  ],
+  "n_targets": 1,
+  "metric": "roc-auc",
+  "source": "tdc",
+  "tdc_name": "dili",
+  "n_after": 475,
+  "n_train_val": 379,
+  "n_test": 96,
+  "cleaning": "none (rows kept verbatim to match TDC leaderboard split)"
+}

@@ -1,0 +1,32 @@
+{
+  "dataset": "sider",
+  "base_protocol": "v2_astartes",
+  "outer_seed": 1,
+  "mode": "absolute_n",
+  "task_type": "cls",
+  "n_targets": 27,
+  "n_train_full": 1142,
+  "points": {
+    "n00100": {
+      "target_n": 100,
+      "n_train": 100
+    },
+    "n00250": {
+      "target_n": 250,
+      "n_train": 250
+    },
+    "n00500": {
+      "target_n": 500,
+      "n_train": 500
+    },
+    "n01000": {
+      "target_n": 1000,
+      "n_train": 1000
+    },
+    "n_full": {
+      "target_n": 1142,
+      "n_train": 1142,
+      "reuse_split": "v2_astartes_seed1"
+    }
+  }
+}

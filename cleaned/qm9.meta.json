@@ -1,0 +1,63 @@
+{
+  "dataset": "qm9",
+  "task_type": "reg",
+  "raw_path": "/data/rbg/users/yxie25/molclr_chemprop/MolFCL/data/ours_qm9_seed0.csv",
+  "raw_rows": 133884,
+  "n_targets": 8,
+  "target_columns": [
+    "mu",
+    "alpha",
+    "homo",
+    "lumo",
+    "gap",
+    "r2",
+    "zpve",
+    "cv"
+  ],
+  "n_dropped_invalid_smiles": 0,
+  "n_unique_canonical_smiles": 133797,
+  "n_duplicate_groups": 87,
+  "n_duplicate_source_rows_collapsed": 87,
+  "per_target_dedup": {
+    "mu": {
+      "groups_same": 87,
+      "groups_conflict": 0
+    },
+    "alpha": {
+      "groups_same": 87,
+      "groups_conflict": 0
+    },
+    "homo": {
+      "groups_same": 87,
+      "groups_conflict": 0
+    },
+    "lumo": {
+      "groups_same": 87,
+      "groups_conflict": 0
+    },
+    "gap": {
+      "groups_same": 87,
+      "groups_conflict": 0
+    },
+    "r2": {
+      "groups_same": 87,
+      "groups_conflict": 0
+    },
+    "zpve": {
+      "groups_same": 87,
+      "groups_conflict": 0
+    },
+    "cv": {
+      "groups_same": 87,
+      "groups_conflict": 0
+    }
+  },
+  "regression_dup_tolerance": {
+    "abs": 0.0,
+    "rel": 0.001
+  },
+  "n_dropped_all_nan_after_dedup": 0,
+  "n_after": 133797,
+  "rdkit_version": "n/a",
+  "git_sha": "3d3bc1912be27b0c97435fd9134f4d4c73d4c5ab"
+}

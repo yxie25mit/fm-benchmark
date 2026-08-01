@@ -1,0 +1,27 @@
+batch_size: 32
+dataset:
+  data_path: data/qm9/qm9.csv
+  num_workers: 4
+  splitting: random
+  task: regression
+  test_size: 0.1
+  valid_size: 0.1
+epochs: 100
+eval_every_n_epochs: 1
+fine_tune_from: pretrained_gin
+fp16_precision: false
+gpu: cuda:0
+init_base_lr: 0.0001
+init_lr: 0.0005
+log_every_n_steps: 50
+model:
+  drop_ratio: 0.1
+  emb_dim: 300
+  feat_dim: 512
+  num_layer: 5
+  pool: mean
+  pred_act: softplus
+  pred_n_layer: 2
+model_type: gin
+task_name: qm9
+weight_decay: 1e-6

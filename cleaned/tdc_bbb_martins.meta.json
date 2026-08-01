@@ -1,0 +1,15 @@
+{
+  "dataset": "tdc_bbb_martins",
+  "task_type": "cls",
+  "target_columns": [
+    "Y"
+  ],
+  "n_targets": 1,
+  "metric": "roc-auc",
+  "source": "tdc",
+  "tdc_name": "bbb_martins",
+  "n_after": 2030,
+  "n_train_val": 1624,
+  "n_test": 406,
+  "cleaning": "none (rows kept verbatim to match TDC leaderboard split)"
+}

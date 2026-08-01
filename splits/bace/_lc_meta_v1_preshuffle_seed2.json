@@ -1,0 +1,44 @@
+{
+  "dataset": "bace",
+  "base_protocol": "v1_preshuffle",
+  "outer_seed": 2,
+  "task_type": "cls",
+  "n_train_full": 1209,
+  "fractions": {
+    "f005": {
+      "frac": 0.05,
+      "n_train": 61,
+      "n_pos": 29,
+      "n_neg": 32
+    },
+    "f010": {
+      "frac": 0.1,
+      "n_train": 122,
+      "n_pos": 58,
+      "n_neg": 64
+    },
+    "f020": {
+      "frac": 0.2,
+      "n_train": 243,
+      "n_pos": 116,
+      "n_neg": 127
+    },
+    "f040": {
+      "frac": 0.4,
+      "n_train": 484,
+      "n_pos": 231,
+      "n_neg": 253
+    },
+    "f070": {
+      "frac": 0.7,
+      "n_train": 847,
+      "n_pos": 404,
+      "n_neg": 443
+    },
+    "f100": {
+      "frac": 1.0,
+      "n_train": 1209,
+      "reuse_split": "v1_preshuffle_seed2"
+    }
+  }
+}

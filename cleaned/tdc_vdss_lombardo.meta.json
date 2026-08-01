@@ -1,0 +1,15 @@
+{
+  "dataset": "tdc_vdss_lombardo",
+  "task_type": "reg",
+  "target_columns": [
+    "Y"
+  ],
+  "n_targets": 1,
+  "metric": "spearman",
+  "source": "tdc",
+  "tdc_name": "vdss_lombardo",
+  "n_after": 1130,
+  "n_train_val": 904,
+  "n_test": 226,
+  "cleaning": "none (rows kept verbatim to match TDC leaderboard split)"
+}

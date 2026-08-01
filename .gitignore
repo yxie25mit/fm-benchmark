@@ -1,0 +1,23 @@
+# runtime outputs & caches
+results/
+logs/
+cache/
+__pycache__/
+*.pyc
+
+# manuscript / scratch (not part of the pipeline)
+jcim_*/
+ext_raw/
+pharma_run.py
+foundation_model_*
+*.pdf
+*.tex
+*.docx
+*.tar.gz
+*.html
+
+# transient user-prepared / smoke-test datasets
+cleaned/user_*
+cleaned/e2e_*
+splits/user_*
+splits/e2e_*

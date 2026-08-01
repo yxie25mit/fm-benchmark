@@ -1,0 +1,64 @@
+{
+  "dataset": "hiv",
+  "base_protocol": "v2_astartes",
+  "outer_seed": 1,
+  "mode": "absolute_n",
+  "task_type": "cls",
+  "n_targets": 1,
+  "n_train_full": 32897,
+  "points": {
+    "n00100": {
+      "target_n": 100,
+      "n_train": 100,
+      "n_pos": 4,
+      "n_neg": 96
+    },
+    "n00250": {
+      "target_n": 250,
+      "n_train": 250,
+      "n_pos": 9,
+      "n_neg": 241
+    },
+    "n00500": {
+      "target_n": 500,
+      "n_train": 500,
+      "n_pos": 18,
+      "n_neg": 482
+    },
+    "n01000": {
+      "target_n": 1000,
+      "n_train": 1000,
+      "n_pos": 37,
+      "n_neg": 963
+    },
+    "n02500": {
+      "target_n": 2500,
+      "n_train": 2500,
+      "n_pos": 92,
+      "n_neg": 2408
+    },
+    "n05000": {
+      "target_n": 5000,
+      "n_train": 5000,
+      "n_pos": 183,
+      "n_neg": 4817
+    },
+    "n10000": {
+      "target_n": 10000,
+      "n_train": 10000,
+      "n_pos": 367,
+      "n_neg": 9633
+    },
+    "n20000": {
+      "target_n": 20000,
+      "n_train": 20000,
+      "n_pos": 733,
+      "n_neg": 19267
+    },
+    "n_full": {
+      "target_n": 32897,
+      "n_train": 32897,
+      "reuse_split": "v2_astartes_seed1"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "dataset": "acme",
+  "task_type": "cls",
+  "target_columns": [
+    "activity"
+  ],
+  "n_targets": 1,
+  "n_after": 4,
+  "user_created": true
+}

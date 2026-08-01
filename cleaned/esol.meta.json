@@ -1,0 +1,28 @@
+{
+  "dataset": "esol",
+  "task_type": "reg",
+  "raw_path": "/data/rbg/users/yxie25/molclr_chemprop/MolFCL/data/ours_esol.csv",
+  "raw_rows": 1127,
+  "n_targets": 1,
+  "target_columns": [
+    "measured log solubility in mols per litre"
+  ],
+  "n_dropped_invalid_smiles": 0,
+  "n_unique_canonical_smiles": 1116,
+  "n_duplicate_groups": 11,
+  "n_duplicate_source_rows_collapsed": 11,
+  "per_target_dedup": {
+    "measured log solubility in mols per litre": {
+      "groups_same": 10,
+      "groups_conflict": 1
+    }
+  },
+  "regression_dup_tolerance": {
+    "abs": 0.5,
+    "rel": 0.0
+  },
+  "n_dropped_all_nan_after_dedup": 1,
+  "n_after": 1115,
+  "rdkit_version": "n/a",
+  "git_sha": "3d3bc1912be27b0c97435fd9134f4d4c73d4c5ab"
+}

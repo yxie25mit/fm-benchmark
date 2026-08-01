@@ -1,0 +1,16 @@
+{
+  "dataset": "tdc_solubility_aqsoldb",
+  "task_type": "reg",
+  "target_columns": [
+    "Y"
+  ],
+  "n_targets": 1,
+  "metric": "mae",
+  "source": "tdc",
+  "tdc_name": "solubility_aqsoldb",
+  "n_after": 9980,
+  "n_train_val": 7985,
+  "n_test": 1995,
+  "n_dropped_invalid_smiles": 2,
+  "cleaning": "dropped 2 RDKit(strict)-unparseable SMILES; splits remapped"
+}

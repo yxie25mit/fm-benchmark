@@ -1,0 +1,15 @@
+{
+  "dataset": "tdc_ppbr_az",
+  "task_type": "reg",
+  "target_columns": [
+    "Y"
+  ],
+  "n_targets": 1,
+  "metric": "mae",
+  "source": "tdc",
+  "tdc_name": "ppbr_az",
+  "n_after": 2790,
+  "n_train_val": 2231,
+  "n_test": 559,
+  "cleaning": "none (rows kept verbatim to match TDC leaderboard split)"
+}

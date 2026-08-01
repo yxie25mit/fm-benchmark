@@ -1,0 +1,15 @@
+{
+  "dataset": "tdc_ld50_zhu",
+  "task_type": "reg",
+  "target_columns": [
+    "Y"
+  ],
+  "n_targets": 1,
+  "metric": "mae",
+  "source": "tdc",
+  "tdc_name": "ld50_zhu",
+  "n_after": 7385,
+  "n_train_val": 5907,
+  "n_test": 1478,
+  "cleaning": "none (rows kept verbatim to match TDC leaderboard split)"
+}

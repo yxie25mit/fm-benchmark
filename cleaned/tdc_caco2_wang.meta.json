@@ -1,0 +1,15 @@
+{
+  "dataset": "tdc_caco2_wang",
+  "task_type": "reg",
+  "target_columns": [
+    "Y"
+  ],
+  "n_targets": 1,
+  "metric": "mae",
+  "source": "tdc",
+  "tdc_name": "caco2_wang",
+  "n_after": 910,
+  "n_train_val": 728,
+  "n_test": 182,
+  "cleaning": "none (rows kept verbatim to match TDC leaderboard split)"
+}

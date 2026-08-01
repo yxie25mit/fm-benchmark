@@ -1,0 +1,15 @@
+{
+  "dataset": "tdc_lipophilicity_astrazeneca",
+  "task_type": "reg",
+  "target_columns": [
+    "Y"
+  ],
+  "n_targets": 1,
+  "metric": "mae",
+  "source": "tdc",
+  "tdc_name": "lipophilicity_astrazeneca",
+  "n_after": 4200,
+  "n_train_val": 3360,
+  "n_test": 840,
+  "cleaning": "none (rows kept verbatim to match TDC leaderboard split)"
+}

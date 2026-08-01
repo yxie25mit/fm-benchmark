@@ -1,0 +1,83 @@
+{
+  "dataset": "qm8",
+  "task_type": "reg",
+  "raw_path": "/data/rbg/users/yxie25/molclr_chemprop/MolFCL/data/ours_qm8.csv",
+  "raw_rows": 21785,
+  "n_targets": 12,
+  "target_columns": [
+    "E1-CC2",
+    "E2-CC2",
+    "f1-CC2",
+    "f2-CC2",
+    "E1-PBE0",
+    "E2-PBE0",
+    "f1-PBE0",
+    "f2-PBE0",
+    "E1-CAM",
+    "E2-CAM",
+    "f1-CAM",
+    "f2-CAM"
+  ],
+  "n_dropped_invalid_smiles": 0,
+  "n_unique_canonical_smiles": 21765,
+  "n_duplicate_groups": 20,
+  "n_duplicate_source_rows_collapsed": 20,
+  "per_target_dedup": {
+    "E1-CC2": {
+      "groups_same": 20,
+      "groups_conflict": 0
+    },
+    "E2-CC2": {
+      "groups_same": 20,
+      "groups_conflict": 0
+    },
+    "f1-CC2": {
+      "groups_same": 20,
+      "groups_conflict": 0
+    },
+    "f2-CC2": {
+      "groups_same": 20,
+      "groups_conflict": 0
+    },
+    "E1-PBE0": {
+      "groups_same": 20,
+      "groups_conflict": 0
+    },
+    "E2-PBE0": {
+      "groups_same": 20,
+      "groups_conflict": 0
+    },
+    "f1-PBE0": {
+      "groups_same": 20,
+      "groups_conflict": 0
+    },
+    "f2-PBE0": {
+      "groups_same": 20,
+      "groups_conflict": 0
+    },
+    "E1-CAM": {
+      "groups_same": 20,
+      "groups_conflict": 0
+    },
+    "E2-CAM": {
+      "groups_same": 20,
+      "groups_conflict": 0
+    },
+    "f1-CAM": {
+      "groups_same": 20,
+      "groups_conflict": 0
+    },
+    "f2-CAM": {
+      "groups_same": 20,
+      "groups_conflict": 0
+    }
+  },
+  "regression_dup_tolerance": {
+    "abs": 0.0,
+    "rel": 0.001
+  },
+  "n_dropped_all_nan_after_dedup": 0,
+  "n_after": 21765,
+  "rdkit_version": "n/a",
+  "git_sha": "3d3bc1912be27b0c97435fd9134f4d4c73d4c5ab"
+}

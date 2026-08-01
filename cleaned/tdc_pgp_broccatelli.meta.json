@@ -1,0 +1,15 @@
+{
+  "dataset": "tdc_pgp_broccatelli",
+  "task_type": "cls",
+  "target_columns": [
+    "Y"
+  ],
+  "n_targets": 1,
+  "metric": "roc-auc",
+  "source": "tdc",
+  "tdc_name": "pgp_broccatelli",
+  "n_after": 1218,
+  "n_train_val": 973,
+  "n_test": 245,
+  "cleaning": "none (rows kept verbatim to match TDC leaderboard split)"
+}

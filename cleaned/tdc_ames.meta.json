@@ -1,0 +1,15 @@
+{
+  "dataset": "tdc_ames",
+  "task_type": "cls",
+  "target_columns": [
+    "Y"
+  ],
+  "n_targets": 1,
+  "metric": "roc-auc",
+  "source": "tdc",
+  "tdc_name": "ames",
+  "n_after": 7278,
+  "n_train_val": 5821,
+  "n_test": 1457,
+  "cleaning": "none (rows kept verbatim to match TDC leaderboard split)"
+}

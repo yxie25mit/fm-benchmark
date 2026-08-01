@@ -1,0 +1,15 @@
+{
+  "dataset": "tdc_cyp2d6_veith",
+  "task_type": "cls",
+  "target_columns": [
+    "Y"
+  ],
+  "n_targets": 1,
+  "metric": "pr-auc",
+  "source": "tdc",
+  "tdc_name": "cyp2d6_veith",
+  "n_after": 13130,
+  "n_train_val": 10504,
+  "n_test": 2626,
+  "cleaning": "none (rows kept verbatim to match TDC leaderboard split)"
+}

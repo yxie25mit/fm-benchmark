@@ -1,0 +1,30 @@
+{
+  "dataset": "clintox",
+  "task_type": "cls",
+  "raw_path": "/data/rbg/users/yxie25/molclr_chemprop/MolFCL/data/ours_clintox.csv",
+  "raw_rows": 1476,
+  "n_targets": 2,
+  "target_columns": [
+    "CT_TOX",
+    "FDA_APPROVED"
+  ],
+  "n_dropped_invalid_smiles": 0,
+  "n_unique_canonical_smiles": 1457,
+  "n_duplicate_groups": 19,
+  "n_duplicate_source_rows_collapsed": 19,
+  "per_target_dedup": {
+    "CT_TOX": {
+      "groups_same": 0,
+      "groups_conflict": 19
+    },
+    "FDA_APPROVED": {
+      "groups_same": 0,
+      "groups_conflict": 19
+    }
+  },
+  "regression_dup_tolerance": null,
+  "n_dropped_all_nan_after_dedup": 19,
+  "n_after": 1438,
+  "rdkit_version": "n/a",
+  "git_sha": "3d3bc1912be27b0c97435fd9134f4d4c73d4c5ab"
+}
