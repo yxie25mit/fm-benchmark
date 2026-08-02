@@ -32,15 +32,9 @@ for e in orchestrator chemprop2 molclr molfcl molformer; do conda env create -f 
 | `molfcl` | molfcl, motil | chemprop v1 fork |
 | `molformer` | molformer | torch 1.7.1, pytorch-lightning |
 
-### 3. Download the pretrained checkpoints
+### 3. Point the pipeline at your paths
 ```bash
-bash download_checkpoints.sh
-```
-Auto-fetches **CheMeleon** (Zenodo) and **MoLFormer** (HuggingFace). MolCLR's ships in the repo;
-MolFCL/MotiL's ride inside their fork submodules.
-
-### 4. Point the pipeline at your paths
-```bash
+conda activate orchestrator
 cp config/env.sh.example config/env.sh
 source config/env.sh
 ```
@@ -49,8 +43,16 @@ fork + CheMeleon paths from the repo). Only if `source` prints `conda: command n
 `config/env.sh` and set the single `[EDIT]` line `PIPELINE_CONDA_ENVS` to your conda envs folder
 (e.g. `/home/you/miniconda3/envs`).
 
-Run all top-level commands with the **orchestrator** env's python (that's `$PIPELINE_PYTHON`, set
-by `config/env.sh`).
+Run all top-level commands from the activated **orchestrator** env (equivalently, `$PIPELINE_PYTHON`,
+which `config/env.sh` sets). You do **not** activate the per-method envs by hand — the pipeline calls
+each method's env python by absolute path.
+
+### 4. Download the pretrained checkpoints
+```bash
+bash download_checkpoints.sh
+```
+Auto-fetches **CheMeleon** (Zenodo) and **MoLFormer** (HuggingFace). MolCLR's ships in the repo;
+MolFCL/MotiL's ride inside their fork submodules. (Reads the env vars set in step 3, so run it after.)
 
 ---
 
@@ -94,6 +96,24 @@ split exactly** — nothing is reshuffled (safe for time splits).
 - **`--phases default`** — each method's default HPs, one 5-model ensemble per fold (fast).
 - **`--phases hp_search hp_final`** — tunes the grid: every config runs on **all** folds, best is
   picked by **mean validation across folds** (TDC-style), then trained on every fold.
+
+### Quick check (does every method run? ~10 min)
+Trains all methods on the smallest dataset with a tiny split and only 2 epochs — for confirming the
+install works, **not** for real numbers:
+```bash
+# 6 fast methods together
+python -m orchestrator.run_benchmark \
+  --methods chemprop2 chemprop2_nofp chemeleon molclr molfcl motil \
+  --datasets freesolv --protocols v1_det --phases default \
+  --epochs-default 2 --gpus 0,1,2,3 --jobs-per-gpu 2
+# molformer on its own (needs --jobs-per-gpu 1)
+python -m orchestrator.run_benchmark \
+  --methods molformer --datasets freesolv --protocols v1_det --phases default \
+  --epochs-default 2 --gpus 0,1,2,3 --jobs-per-gpu 1
+# see per-method results (one row each = it worked)
+python collect_results.py --dataset freesolv --protocol v1_det --phase default \
+  --methods chemprop2 chemprop2_nofp chemeleon molclr molfcl motil molformer --out smoke.csv
+```
 
 ### Commands
 Our methods on **your** split (default HPs):
