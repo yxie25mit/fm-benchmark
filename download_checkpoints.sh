@@ -33,6 +33,6 @@ fetch "TODO" "$MOTIL_DIR/dumped/pre-train/1-model/original_CMPN_0707_0800_12000t
 #   https://ibm.box.com/v/MoLFormer-data  ->  "Pretrained MoLFormer/checkpoints/N-Step-Checkpoint_3_30000.ckpt"
 #   Box needs a manual/browser download. EASIEST FOR USERS: re-host this one file on Zenodo/HF and
 #   put the direct URL below (replace REHOST_URL).
-fetch "REHOST_URL" "$MOLFORMER_DIR/Pretrained MoLFormer/checkpoints/N-Step-Checkpoint_3_30000.ckpt"
+fetch "https://huggingface.co/yxie25/molformer-ckpt/resolve/main/N-Step-Checkpoint_3_30000.ckpt" "$MOLFORMER_DIR/Pretrained MoLFormer/checkpoints/N-Step-Checkpoint_3_30000.ckpt"
 
 echo "done — any 'set the URL' lines above still need the canonical source filled in."

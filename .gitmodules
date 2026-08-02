@@ -1,0 +1,9 @@
+[submodule "forks/MolFCL"]
+	path = forks/MolFCL
+	url = https://github.com/yxie25mit/MolFCL-fork.git
+[submodule "forks/MotiL"]
+	path = forks/MotiL
+	url = https://github.com/yxie25mit/MotiL-fork.git
+[submodule "forks/molformer"]
+	path = forks/molformer
+	url = https://github.com/yxie25mit/molformer-fork.git
