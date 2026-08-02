@@ -190,7 +190,8 @@ def prepare(args):
 
 def main():
     p = argparse.ArgumentParser(description="Adapt user CSVs into the pipeline data format (no re-splitting).")
-    p.add_argument("--name", required=True, help="short tag; data lands under user_<name>.")
+    p.add_argument("--name", required=True,
+                   help="dataset tag; writes cleaned/<name>.csv + splits/<name>/ (must not collide with a built-in dataset).")
     p.add_argument("--train-csv"); p.add_argument("--val-csv"); p.add_argument("--test-csv")
     p.add_argument("--splits-dir", help="dir of fold subdirs each with train/val/test.csv")
     p.add_argument("--smiles-col", default="smiles")

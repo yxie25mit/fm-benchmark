@@ -76,12 +76,23 @@ python prepare_user_data.py --name acme \
   --train-csv train.csv --val-csv val.csv --test-csv test.csv \
   --smiles-col SMILES --target-cols activity --task cls
 ```
-Many folds (→ mean±std across them) — a directory of fold subdirs, each with `train/val/test.csv`:
+Many folds (→ mean±std across them) — a directory of fold subdirs, each with `train/val/test.csv`
+(subdirs are read in **sorted name order** → `custom_seed0, custom_seed1, …`):
 ```bash
 python prepare_user_data.py --name acme --splits-dir folds/ --target-cols Y --task reg
 ```
 It drops RDKit-invalid SMILES (reported) and warns on train/test leakage, but **preserves your
-split exactly** — nothing is reshuffled (safe for time splits).
+split exactly** — nothing is reshuffled (safe for time splits). At run time `--protocols custom`
+runs **every** fold and reports **mean±std**; tuned runs pick the best HP by **mean validation over
+all folds** (TDC-style).
+
+**Flags:**
+- `--target-cols` — one or more label columns (pass several for multitask); blanks = missing (NaN-aware).
+- `--metric` — optional; if omitted it's derived from `--task` (cls→ROC-AUC, reg→RMSE). Case-insensitive,
+  `-`/`_` interchangeable. Supported: **cls** `roc_auc`(`auc`), `pr_auc`(`auprc`) — maximized; **reg**
+  `rmse`, `mae`, `mse`, `scaled_mae` — minimized · `spearman`, `pearson` — maximized. The optimize
+  direction (used for best-val HP selection) is inferred from the metric.
+- `--learning-curve-sizes` / `--lc-repeats` — see [Learning curves](#learning-curves-low-data-regime) below.
 
 ## The run command = `--protocols` (which split) + `--phases` (default vs tuned HPs)
 
