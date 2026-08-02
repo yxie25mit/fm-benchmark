@@ -1,0 +1,114 @@
+================================================================
+ fm-benchmark — copy-paste commands (setup once, then run)
+================================================================
+
+Datasets available (built-in, already split):
+  freesolv esol sider clintox bace bbbp lipo qm7 tox21 qm8 hiv qm9
+Methods:
+  chemprop2 chemprop2_nofp chemeleon molclr molfcl motil molformer
+Protocols (splits already in the repo — no prep needed):
+  v1_preshuffle   scaffold, buckets largest->smallest
+  v2_astartes     scaffold, whole clusters to train/val/test
+Phases:
+  default             each method's default HPs (fast)
+  hp_search hp_final  tune the grid, pick best by mean val, retrain
+
+----------------------------------------------------------------
+ CONDA — what to activate (read this first)
+----------------------------------------------------------------
+You do NOT run `conda activate foldeverything`. That env is unrelated.
+
+Only the TOP-LEVEL launcher needs an env (it just needs numpy/pandas/
+rdkit) — that's the `orchestrator` env. Every actual training job is
+launched by the pipeline itself using each method's own env python by
+ABSOLUTE PATH, so you never conda-activate the method envs by hand.
+
+Simplest, do this in a fresh shell:
+
+    conda deactivate            # drop out of foldeverything/base if active
+    conda activate orchestrator
+    cd /path/to/fm-benchmark
+    source config/env.sh        # sets $PIPELINE_PYTHON etc.
+
+(You don't strictly HAVE to deactivate foldeverything — if you launch
+with the absolute orchestrator python `$PIPELINE_PYTHON -m ...` the
+active env is ignored. But activating `orchestrator` is the clean way
+and lets you type plain `python`.)
+
+================================================================
+ SETUP  (run once)
+================================================================
+
+# 1. clone with the method forks
+git clone --recursive https://github.com/yxie25mit/fm-benchmark.git
+cd fm-benchmark
+# if you forgot --recursive:  git submodule update --init
+
+# 2. create the 5 conda envs (orchestrator + one per method family)
+for e in orchestrator chemprop2 molclr molfcl molformer; do conda env create -f envs/$e.yml; done
+
+# 3. download pretrained checkpoints (CheMeleon from Zenodo, MoLFormer from HF)
+bash download_checkpoints.sh
+
+# 4. point the pipeline at your paths (auto-detects; you edit nothing normally)
+cp config/env.sh.example config/env.sh
+conda activate orchestrator
+source config/env.sh
+
+================================================================
+ RUN — on the CURRENT (built-in) splits
+================================================================
+# no prepare_user_data.py needed — these splits already exist in the repo.
+
+# --- quick smoke: 2 small datasets, default HPs, one protocol ---
+python -m orchestrator.run_benchmark \
+  --methods chemeleon chemprop2 molclr \
+  --datasets freesolv esol \
+  --protocols v1_preshuffle \
+  --phases default \
+  --gpus 0,1,2,3 --jobs-per-gpu 1
+
+# --- full comparison: several methods, both scaffold protocols, tuned ---
+python -m orchestrator.run_benchmark \
+  --methods chemeleon chemprop2 molclr molfcl motil \
+  --datasets bace esol sider clintox bbbp \
+  --protocols v1_preshuffle v2_astartes \
+  --phases hp_search hp_final \
+  --gpus 0,1,2,3,4,5,6,7 --jobs-per-gpu 2
+
+# NOTE: molformer must use --jobs-per-gpu 1 (run it in its own command):
+python -m orchestrator.run_benchmark \
+  --methods molformer \
+  --datasets bace esol \
+  --protocols v1_preshuffle v2_astartes \
+  --phases hp_search hp_final \
+  --gpus 0,1,2,3,4,5,6,7 --jobs-per-gpu 1
+
+================================================================
+ COLLECT RESULTS
+================================================================
+python collect_results.py \
+  --dataset bace --protocol v1_preshuffle --phase hp_final \
+  --methods chemeleon chemprop2 molclr molfcl motil --out bace.csv
+
+# output layout:
+#   results/<method>/<dataset>/<protocol>/<phase>/_summary.json  (mean +/- std across folds)
+
+================================================================
+ OPTIONAL — use your OWN fine-tuned checkpoint
+================================================================
+# prefix the method's env var; works on the current splits too.
+CHEMELEON_CKPT=/path/your_chemeleon.pt \
+python -m orchestrator.run_benchmark --methods chemeleon \
+  --datasets bace --protocols v1_preshuffle --phases default --gpus 0,1,2,3
+# other vars: MOLCLR_CKPT_DIR  MOLFCL_CKPT  MOTIL_CKPT  MOLFORMER_CKPT
+
+================================================================
+ OPTIONAL — bring your own CSV split (custom protocol)
+================================================================
+# only needed if you're NOT using the built-in datasets.
+python prepare_user_data.py --name acme \
+  --train-csv train.csv --val-csv val.csv --test-csv test.csv \
+  --smiles-col SMILES --target-cols activity --task cls
+python -m orchestrator.run_benchmark --methods chemeleon molclr \
+  --datasets acme --protocols custom --phases default --gpus 0,1,2,3

@@ -1,7 +1,7 @@
 # Molecular property benchmark
 
-Run 8 molecular property-prediction methods — `chemprop2`, `chemprop2_nofp`, `chemeleon`,
-`chemeleon_nofp`, `molclr`, `molfcl`, `motil`, `molformer` — on MoleculeNet + TDC, or on **your own
+Run 7 molecular property-prediction methods — `chemprop2`, `chemprop2_nofp`, `chemeleon`,
+`molclr`, `molfcl`, `motil`, `molformer` — on MoleculeNet + TDC, or on **your own
 data / splits / fine-tuned checkpoints**.
 
 Two parts: **[Setup](#setup)** (once) → **[Run](#run)**.
@@ -27,7 +27,7 @@ for e in orchestrator chemprop2 molclr molfcl molformer; do conda env create -f 
 | env | runs | notes |
 |-----|------|-------|
 | `orchestrator` | the pipeline + data prep + result collection (no GPU/torch) | light: numpy/pandas/rdkit/sklearn/scipy/matplotlib |
-| `chemprop2` | chemprop2, chemprop2_nofp, chemeleon, chemeleon_nofp | chemprop v2 |
+| `chemprop2` | chemprop2, chemprop2_nofp, chemeleon | chemprop v2 |
 | `molclr` | molclr | torch 1.7.1+cu110 (yml has the cu110 `--find-links`) |
 | `molfcl` | molfcl, motil | chemprop v1 fork |
 | `molformer` | molformer | torch 1.7.1, pytorch-lightning |
@@ -123,7 +123,7 @@ python -m orchestrator.run_benchmark --methods chemeleon --datasets acme \
 ```
 | method | env var | expects |
 |--------|---------|---------|
-| chemeleon / chemeleon_nofp | `CHEMELEON_CKPT` | a `.pt` file |
+| chemeleon | `CHEMELEON_CKPT` | a chemprop-saved model `.pt` (a *fine-tuned* CheMeleon from a prior chemprop run — **not** the raw foundation file) |
 | molclr | `MOLCLR_CKPT_DIR` | a dir holding `checkpoints/model.pth` |
 | molfcl | `MOLFCL_CKPT` | a `.pkl` |
 | motil | `MOTIL_CKPT` | a `.pkl` |
