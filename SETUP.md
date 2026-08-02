@@ -41,9 +41,12 @@ bash download_checkpoints.sh        # pulls MoLFormer / CheMeleon / MolFCL / Mot
 ## Step 4 — Point the pipeline at your paths
 ```bash
 cp config/env.sh.example config/env.sh
-$EDITOR config/env.sh                # set PIPELINE_CONDA_ENVS + the fork/checkpoint dirs
 source config/env.sh
 ```
+**You normally edit nothing** — all paths auto-detect (conda env location via `conda info --base`;
+fork + CheMeleon paths from the repo itself). Only if `source` says `conda: command not found`,
+open `config/env.sh` and set the single `[EDIT]` line `PIPELINE_CONDA_ENVS` to your conda envs
+folder (e.g. `/home/you/miniconda3/envs`).
 
 ## Step 5 — Run  (see README_PHARMA.md for all options)
 ```bash

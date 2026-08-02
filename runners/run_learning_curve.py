@@ -18,7 +18,7 @@ import argparse
 import sys
 from pathlib import Path
 
-PIPELINE = Path("/data/rbg/users/yxie25/molclr_chemprop/clean_pipeline_v1")
+PIPELINE = Path(__file__).resolve().parents[1]   # repo root (relocatable)
 sys.path.insert(0, str(PIPELINE / "runners"))
 sys.path.insert(0, str(PIPELINE / "methods"))
 
