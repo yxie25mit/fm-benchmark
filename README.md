@@ -191,6 +191,22 @@ python collect_results.py --dataset acme --protocol custom --learning-curve \
 
 ---
 
+## Notes on molformer (how it differs from upstream)
+molformer's finetuning here departs from the upstream IBM MoLFormer repo in ways that matter when
+you read its numbers:
+
+- **Multi-target (multitask) support is our extension.** Upstream MoLFormer trains **one model per
+  property** for regression — e.g. its QM9 paper number is the *average of 12 single-property models*
+  — and only supports multitask *classification* for a few hardcoded benchmark datasets. To keep
+  molformer consistent with the other 6 methods, here it trains **one shared multitask model** (N
+  output heads) for both classification and regression, and works on your **own** multi-target data. If your dataset has one endpoint (one
+  property), molformer uses the original upstream trainer. The multitask paths are code we added.
+- **Per-target standardization.** For multitask regression each target column is standardized (train
+  mean/std) before training and predictions are de-standardized for the reported MAE — necessary
+  because properties can be on very different scales.
+- **Same as upstream:** single-target classification/regression, and the multitask-classification
+  model structure.
+
 ## Method credits (originals these forks/checkpoints derive from)
 MolCLR (github.com/yuyangw/MolCLR) · MolFCL (github.com/tangxiangcsu/MolFCL) ·
 MotiL (github.com/Young0222/MotiL) · MoLFormer (github.com/IBM/molformer) ·
