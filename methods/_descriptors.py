@@ -19,7 +19,7 @@ FEATURIZER = "v1_rdkit_2d_normalized"
 N_WORKERS = int(os.environ.get("MOLNET_DESC_WORKERS", "4"))
 CACHE_DIR = Path(os.environ.get(
     "MOLNET_DESC_CACHE",
-    "/data/rbg/users/yxie25/molclr_chemprop/clean_pipeline_v1/cache/rdkit2d"))
+    str(Path(__file__).resolve().parents[1] / "cache" / "rdkit2d")))
 
 
 def _content_hash(path):

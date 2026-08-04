@@ -8,11 +8,12 @@ Each entry consumed by runners/run_phase.py to launch subprocess training.
 """
 import itertools
 import os
+import sys
 from pathlib import Path
 
 PIPELINE = Path(__file__).resolve().parents[1]   # clean_pipeline_v1/ (relocatable)
 METHODS_DIR = PIPELINE / "methods"
-ENVS = os.environ.get("PIPELINE_CONDA_ENVS", "/data/rbg/users/yxie25/anaconda3/envs")
+ENVS = os.environ.get("PIPELINE_CONDA_ENVS", str(Path(sys.executable).resolve().parents[2]))
 
 
 METHODS = {

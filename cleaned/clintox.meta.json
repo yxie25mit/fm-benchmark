@@ -1,7 +1,7 @@
 {
   "dataset": "clintox",
   "task_type": "cls",
-  "raw_path": "/data/rbg/users/yxie25/molclr_chemprop/MolFCL/data/ours_clintox.csv",
+  "raw_path": null,
   "raw_rows": 1476,
   "n_targets": 2,
   "target_columns": [

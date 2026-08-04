@@ -28,7 +28,7 @@ from sklearn.metrics import (
 )
 
 PIPELINE = Path(__file__).resolve().parents[2]   # clean_pipeline_v1/ (relocatable)
-MOLFORMER_DIR = Path(os.environ.get("MOLFORMER_DIR", "/data/rbg/users/yxie25/molclr_chemprop/molformer"))
+MOLFORMER_DIR = Path(os.environ.get("MOLFORMER_DIR", str(Path(__file__).resolve().parents[2] / "forks" / "molformer")))
 FINETUNE_DIR = MOLFORMER_DIR / "finetune"
 sys.path.insert(0, str(FINETUNE_DIR))
 os.chdir(str(FINETUNE_DIR))
@@ -220,18 +220,32 @@ def main():
         print(f"[molformer] already done: {out}")
         return
 
-    # TDC datasets are single-target (column "Y"): route cls -> single-task classification
-    # script, reg -> regression script (same as esol/freesolv).
-    if cli.dataset.startswith("tdc_") and cli.dataset not in TASK_DISPATCH:
+    # Any dataset not in the built-in table (TDC or a user's custom split): derive the
+    # script from its meta.json. Single-target cls -> single-task classification, single-
+    # target reg -> regression (same as esol/freesolv). Multitask has no upstream script.
+    if cli.dataset not in TASK_DISPATCH:
         _m = json.loads((PIPELINE / "cleaned" / f"{cli.dataset}.meta.json").read_text())
-        if _m["task_type"] == "cls":
-            TASK_DISPATCH[cli.dataset] = ("finetune_pubchem_light_classification", "classification", "Y", None)
+        _target_cols = _m.get("target_columns") or ["Y"]
+        if len(_target_cols) == 1:
+            if _m["task_type"] == "cls":
+                TASK_DISPATCH[cli.dataset] = ("finetune_pubchem_light_classification", "classification", _target_cols[0], None)
+            else:
+                TASK_DISPATCH[cli.dataset] = ("finetune_pubchem_light", "regression", None, None)
         else:
-            TASK_DISPATCH[cli.dataset] = ("finetune_pubchem_light", "regression", None, None)
+            # Multitask: one shared model with N task heads (same paradigm as the other
+            # methods). Pass the columns in the user's order so the head trains and emits
+            # in that order -> identity realignment. Classification uses the upstream
+            # multitask script; regression uses our multitask-regression variant of it.
+            os.environ["MOLFORMER_MEASURE_NAMES"] = json.dumps(_target_cols)
+            MULTITASK_MEASURE_ORDER[cli.dataset] = _target_cols
+            if _m["task_type"] == "cls":
+                TASK_DISPATCH[cli.dataset] = ("finetune_pubchem_light_classification_multitask", "classification", None, cli.dataset)
+            else:
+                TASK_DISPATCH[cli.dataset] = ("finetune_pubchem_light_regression_multitask", "regression", None, cli.dataset)
 
     if cli.dataset not in TASK_DISPATCH:
         rec = {"method": "molformer", "dataset": cli.dataset,
-               "error": "task not supported by MolFormer (multitask regression upstream missing)"}
+               "error": "task not supported by MolFormer"}
         (out / "metrics.json").write_text(json.dumps(rec, indent=2))
         (out / "done.flag").touch()
         print(f"[molformer] SKIP: {cli.dataset} not supported")

@@ -140,4 +140,3 @@ dependencies:
       - urllib3==2.6.3
       - xarray==2026.2.0
       - yarl==1.22.0
-prefix: /data/rbg/users/yxie25/anaconda3/envs/chemprop2

@@ -29,8 +29,8 @@ from pathlib import Path
 # nvidia-cusparse-cu11 pip package provides it; ensure its dir is on LD_LIBRARY_PATH
 # BEFORE importing torch. Setting os.environ mid-process is too late for the dynamic
 # loader, so re-exec once with the corrected environment.
-_CUSPARSE_DIR = ("/data/rbg/users/yxie25/anaconda3/envs/molclr/lib/python3.7"
-                 "/site-packages/nvidia/cusparse/lib")
+import sysconfig
+_CUSPARSE_DIR = os.path.join(sysconfig.get_paths()["purelib"], "nvidia", "cusparse", "lib")
 if os.path.isdir(_CUSPARSE_DIR) and _CUSPARSE_DIR not in os.environ.get("LD_LIBRARY_PATH", ""):
     os.environ["LD_LIBRARY_PATH"] = _CUSPARSE_DIR + ":" + os.environ.get("LD_LIBRARY_PATH", "")
     os.execv(sys.executable, [sys.executable] + sys.argv)
@@ -176,9 +176,10 @@ def main():
     # Save artifacts.
     meta = json.loads((PIPELINE / "cleaned" / f"{args.dataset}.meta.json").read_text())
     test_pred = fine_tune.test_predictions
-    if meta.get("source") == "tdc" and meta["task_type"] == "cls":
-        # TDC single-target cls: save positive-class score (N,1) so _tdc_metrics scores
-        # roc-auc/pr-auc correctly (MoleculeNet path is unchanged).
+    if meta.get("source") == "tdc" and meta["task_type"] == "cls" and meta.get("n_targets", 1) == 1:
+        # Single-target cls only: (N,2) softmax -> positive-class score (N,1) so _tdc_metrics
+        # scores roc-auc/pr-auc correctly. For multitask (n_targets>1) the columns are the
+        # tasks, not the 2 classes, so keep all columns.
         tp = np.asarray(test_pred)
         if tp.ndim == 2 and tp.shape[1] == 2:
             test_pred = tp[:, 1].reshape(-1, 1)

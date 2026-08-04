@@ -25,7 +25,7 @@ from sklearn.metrics import (
 )
 
 PIPELINE = Path(__file__).resolve().parents[2]   # clean_pipeline_v1/ (relocatable)
-CHEMPROP = "/data/rbg/users/yxie25/anaconda3/envs/chemprop2/bin/chemprop"
+CHEMPROP = str(Path(sys.executable).parent / "chemprop")  # binary lives beside this env's python
 
 # appended, not prepended: the per-method dirs must keep priority for their own modules
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -249,7 +249,7 @@ def main():
     # read-only; the chemeleon foundation .pt is cached at this HOME from prior runs).
     if "CUDA_VISIBLE_DEVICES" not in os.environ:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
-    os.environ["HOME"] = os.environ.get("CHEMELEON_HOME", "/data/rbg/users/yxie25/chemmeleon_home")
+    os.environ["HOME"] = os.environ.get("CHEMELEON_HOME", str(Path(__file__).resolve().parents[2] / "foundations" / "chemeleon"))
     env = os.environ.copy()
 
     print(f"[chemeleon] launching: {' '.join(cmd[:10])}...")

@@ -105,4 +105,3 @@ dependencies:
       - wandb==0.18.7
       - werkzeug==2.2.3
       - zipp==3.15.0
-prefix: /data/rbg/users/yxie25/anaconda3/envs/molfcl

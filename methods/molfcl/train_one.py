@@ -32,11 +32,14 @@ from sklearn.metrics import (
 )
 
 PIPELINE = Path(__file__).resolve().parents[2]   # clean_pipeline_v1/ (relocatable)
-MOLFCL_DIR = Path(os.environ.get("MOLFCL_DIR", "/data/rbg/users/yxie25/molclr_chemprop/MolFCL"))
+MOLFCL_DIR = Path(os.environ.get("MOLFCL_DIR", str(PIPELINE / "forks" / "MolFCL")))
 
 # Redirect HOME so DGL/RDKit can write to ~/.dgl/, etc. (AFS HOME is read-only).
-os.environ.setdefault("HOME", "/data/rbg/users/yxie25/dgl_home")
-os.environ["HOME"] = "/data/rbg/users/yxie25/dgl_home"
+import tempfile
+_dgl_home = os.environ.get("DGL_HOME_DIR", os.path.join(tempfile.gettempdir(), "molnet_dgl_home"))
+os.makedirs(_dgl_home, exist_ok=True)
+os.environ["HOME"] = _dgl_home
+os.environ.setdefault("DGLBACKEND", "pytorch")  # use pytorch backend directly; skip ~/.dgl/config.json (avoids concurrent first-run race)
 
 # MolFCL is a research repo (no setup.py). Add to sys.path AND chdir into it
 # (it uses relative paths like ./data, ./ckpt internally).
@@ -185,8 +188,13 @@ def main():
     qm_dataset = cli.dataset in ("qm7", "qm8", "qm9")
     if meta.get("source") == "tdc":
         # TDC selects HP by the dataset's PRESCRIBED metric (map to the fork's names).
-        metric = {"roc-auc": "auc", "pr-auc": "prc-auc",
-                  "mae": "mae", "spearman": "spearman"}[meta["metric"]]
+        _mnorm = meta["metric"].strip().lower().replace("_", "-")
+        metric = {"roc-auc": "auc", "auc": "auc",
+                  "pr-auc": "prc-auc", "auprc": "prc-auc", "average-precision": "prc-auc",
+                  "mae": "mae", "rmse": "rmse", "mse": "mse",
+                  "spearman": "spearman", "spearmanr": "spearman",
+                  "pearson": "spearman", "pearsonr": "spearman",
+                  }.get(_mnorm, "auc" if meta["task_type"] == "cls" else "rmse")
     else:
         metric = "auc" if meta["task_type"] == "cls" else ("mae" if qm_dataset else "rmse")
 

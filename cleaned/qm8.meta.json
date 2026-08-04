@@ -1,7 +1,7 @@
 {
   "dataset": "qm8",
   "task_type": "reg",
-  "raw_path": "/data/rbg/users/yxie25/molclr_chemprop/MolFCL/data/ours_qm8.csv",
+  "raw_path": null,
   "raw_rows": 21785,
   "n_targets": 12,
   "target_columns": [

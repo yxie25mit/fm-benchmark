@@ -1,7 +1,7 @@
 {
   "dataset": "sider",
   "task_type": "cls",
-  "raw_path": "/data/rbg/users/yxie25/molclr_chemprop/MolFCL/data/ours_sider.csv",
+  "raw_path": null,
   "raw_rows": 1426,
   "n_targets": 27,
   "target_columns": [

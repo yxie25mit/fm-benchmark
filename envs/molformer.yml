@@ -162,4 +162,3 @@ dependencies:
       - werkzeug==3.0.6
       - yarl==1.15.2
       - zipp==3.20.2
-prefix: /data/rbg/users/yxie25/anaconda3/envs/molformer

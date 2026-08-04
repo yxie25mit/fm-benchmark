@@ -1,7 +1,7 @@
 {
   "dataset": "lipo",
   "task_type": "reg",
-  "raw_path": "/data/rbg/users/yxie25/molclr_chemprop/MolFCL/data/ours_lipo.csv",
+  "raw_path": null,
   "raw_rows": 4199,
   "n_targets": 1,
   "target_columns": [

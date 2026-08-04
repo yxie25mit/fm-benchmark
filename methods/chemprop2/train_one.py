@@ -26,7 +26,7 @@ from sklearn.metrics import (
 )
 
 PIPELINE = Path(__file__).resolve().parents[2]   # clean_pipeline_v1/ (relocatable)
-CHEMPROP = "/data/rbg/users/yxie25/anaconda3/envs/chemprop2/bin/chemprop"
+CHEMPROP = str(Path(sys.executable).parent / "chemprop")  # binary lives beside this env's python
 
 # appended, not prepended: the per-method dirs must keep priority for their own modules
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -246,7 +246,7 @@ def main():
         *train_feat_args,
         "--epochs", str(args.epochs),
         "--warmup-epochs", str(min(2, args.epochs - 1)),
-        "--num-workers", "4",
+        "--num-workers", os.environ.get("CHEMPROP_NUM_WORKERS", "0"),
         "--ensemble-size", "1",
         "--metrics", metric_for_cli,
         "--pytorch-seed", str(args.ensemble_member),

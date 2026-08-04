@@ -187,4 +187,3 @@ dependencies:
       - torchvision==0.8.2+cu110
       - tqdm==4.67.1
       - urllib3==2.0.7
-prefix: /data/rbg/users/yxie25/anaconda3/envs/molclr
