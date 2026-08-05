@@ -95,8 +95,8 @@ dependencies:
       - threadpoolctl==3.1.0
       - torch==1.12.1+cu113
       - torch-geometric==2.0.4
-      - torch-scatter==2.1.1
-      - torch-sparse==0.6.17
+      - torch-scatter==2.0.9   # prebuilt wheel exists for torch-1.12.1+cu113 (2.1.1 has none -> source compile fails without nvcc)
+      - torch-sparse==0.6.14    # prebuilt wheel exists (0.6.17 has none)
       - torchvision==0.13.1
       - tqdm==4.67.3
       - typing-extensions==4.7.1
