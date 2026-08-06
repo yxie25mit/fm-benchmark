@@ -77,6 +77,7 @@ python prepare_user_data.py --name acme \
   --smiles-col SMILES --target-cols activity --task cls
 ```
 Many folds (→ mean±std across them) — a directory of fold subdirs, each with `train/val/test.csv`
+(`val` may also be named `valid`; files may be `.csv` (comma) or `.tsv` (tab))
 (subdirs are read in **sorted name order** → `custom_seed0, custom_seed1, …`):
 ```bash
 python prepare_user_data.py --name acme --splits-dir folds/ --target-cols Y --task reg
