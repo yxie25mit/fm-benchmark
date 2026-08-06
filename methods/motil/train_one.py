@@ -19,6 +19,18 @@ from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
+# libcusparse.so.11 (torch_sparse SpMM) ships inside the env (nvidia-cusparse-cu11) but is
+# not on the default loader path; a clean machine has no system CUDA to fall back on. Setting
+# os.environ mid-process is too late for the dynamic loader, so re-exec once with it fixed
+# (same approach as methods/molclr/train_one.py).
+import sysconfig
+_cusparse_dirs = [os.path.join(sysconfig.get_paths()["purelib"], "nvidia", "cusparse", "lib"),
+                  os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(sys.executable))), "lib")]
+_add = [d for d in _cusparse_dirs if os.path.isdir(d) and d not in os.environ.get("LD_LIBRARY_PATH", "")]
+if _add:
+    os.environ["LD_LIBRARY_PATH"] = ":".join(_add) + ":" + os.environ.get("LD_LIBRARY_PATH", "")
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
 import numpy as np
 import torch
 from sklearn.metrics import (
