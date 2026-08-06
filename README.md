@@ -94,6 +94,9 @@ all folds** (TDC-style).
   direction (used for best-val HP selection) is inferred from the metric.
 - `--learning-curve-sizes` / `--lc-repeats` — see [Learning curves](#learning-curves-low-data-regime) below.
 
+> Have just **one CSV** and want us to scaffold-split it the way we split the benchmark datasets?
+> See [Reproducing our scaffold splits on your own data](#reproducing-our-scaffold-splits-on-your-own-data) at the end.
+
 ## The run command = `--protocols` (which split) + `--phases` (default vs tuned HPs)
 
 **Protocols:**
@@ -211,3 +214,41 @@ you read its numbers:
 MolCLR (github.com/yuyangw/MolCLR) · MolFCL (github.com/tangxiangcsu/MolFCL) ·
 MotiL (github.com/Young0222/MotiL) · MoLFormer (github.com/IBM/molformer) ·
 chemprop (github.com/chemprop/chemprop) · CheMeleon (github.com/JacksonBurns/chemeleon).
+
+---
+
+## Reproducing our scaffold splits on your own data
+The most realistic evaluation is usually a **time split** — train on molecules discovered before a
+cutoff date, test on ones after — because it mirrors real prospective use. If you have reliable
+timestamps, prefer that (feed it via the [`--train/val/test-csv` / `--splits-dir` path](#adapt-your-data-converts-csvs--the-pipelines-format-never-re-splits) above,
+which preserves your split exactly under `--protocols custom`).
+
+If instead you want to evaluate the **same way we do** — our two Bemis–Murcko scaffold-split styles,
+applied to *your* molecules with the identical algorithm — hand us **one CSV** and we generate both.
+(Scaffold splits are a well-established proxy for time splits: chemprop's own comparisons show they
+approximate prospective performance reasonably well.) This runs the *same* `v1_preshuffle` +
+`v2_astartes` code we run on the benchmark datasets (verified to reproduce them byte-for-byte), at
+seeds 0/1/2 (eval) + 3 (HP-only) each, so your numbers line up with ours.
+```bash
+# 1) split: one CSV -> splits/mydata/{v1_preshuffle,v2_astartes}_seed{0,1,2,3}/ + cleaned/mydata.csv
+python prepare_user_data.py --name mydata --csv mydata.csv \
+  --smiles-col SMILES --target-cols activity --task cls   # --metric optional; --task reg for regression
+
+# 2) run — downstream is IDENTICAL to a built-in dataset (just name your dataset + both protocols)
+python -m orchestrator.run_benchmark --methods chemeleon chemprop2 molclr \
+  --datasets mydata --protocols v1_preshuffle v2_astartes --phases default \
+  --gpus 0,1,2,3 --jobs-per-gpu 1
+
+# 3) collect — one comparison table per split style (mean ± std over the 3 eval seeds)
+python collect_results.py --dataset mydata --protocol v1_preshuffle --phase default \
+  --methods chemeleon chemprop2 molclr --out mydata_v1.csv
+python collect_results.py --dataset mydata --protocol v2_astartes --phase default \
+  --methods chemeleon chemprop2 molclr --out mydata_v2.csv
+```
+- Same flags as the adapter above: multitask (several `--target-cols`), `--metric`, and
+  `--learning-curve-sizes` / `--lc-repeats` (subsets are generated per style; then
+  `run_learning_curve.py --protocols v1_preshuffle v2_astartes --fractions <sizes>`).
+- Invalid SMILES dropped and exact duplicates merged (both reported); everything else is scaffold-split.
+- Tuned HPs: swap `--phases default` for `--phases hp_search hp_final`. One style only: `--split-styles v1_preshuffle`.
+- Requires `astartes` in the orchestrator env (in `envs/orchestrator.yml`; `pip install 'astartes[molecules]'`
+  if you built that env before this was added).

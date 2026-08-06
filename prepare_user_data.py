@@ -22,6 +22,10 @@ Inputs — one split:
   --train-csv --val-csv --test-csv
 Inputs — many folds (e.g. rolling time splits):
   --splits-dir DIR   where DIR/<fold>/{train,val,test}.csv
+Input — a SINGLE csv, we scaffold-split it into BOTH our published styles:
+  --csv DATA.csv     writes splits/<name>/{v1_preshuffle,v2_astartes}_seed{0,1,2,3}/
+                     Then run with `--protocols v1_preshuffle v2_astartes` exactly like a
+                     built-in benchmark dataset (same downstream commands).
 """
 import argparse
 import json
@@ -96,6 +100,24 @@ def _stratified_subsample(train_idx, labels, n, task, rng):
     return picked
 
 
+def _write_learning_curve(dataset, base_tag, train_idx, val_idx, test_idx, y_train, sizes, repeats, task):
+    """Nested-ish stratified subsets of `train_idx` at each absolute size (val/test held
+    fixed), written as pseudo-protocol dirs `<base_tag>__<size>_seed<rep>` so
+    run_learning_curve.py loads them via --protocols <base_tag> --fractions <size>."""
+    made = []
+    for size in sorted(set(sizes)):
+        for rep in range(repeats):
+            rng = np.random.default_rng(size * 1000 + rep)
+            sub_train = _stratified_subsample(train_idx, y_train, size, task, rng)
+            d = PIPELINE / "splits" / dataset / f"{base_tag}__{size}_seed{rep}"
+            d.mkdir(parents=True, exist_ok=True)
+            np.save(d / "train_idx.npy", np.asarray(sub_train, dtype=np.int64))
+            np.save(d / "val_idx.npy", np.asarray(val_idx, dtype=np.int64))
+            np.save(d / "test_idx.npy", np.asarray(test_idx, dtype=np.int64))
+        made.append(f"{size}={min(size, len(train_idx))}")
+    print(f"[prep] {base_tag} learning-curve subsets ({repeats} repeats each): " + ", ".join(made))
+
+
 def prepare(args):
     dataset = args.name
     meta_path = PIPELINE / "cleaned" / f"{dataset}.meta.json"
@@ -163,19 +185,8 @@ def prepare(args):
     if args.learning_curve_sizes:
         fold0 = fold_idx[0][1]
         y = cleaned_df.iloc[fold0["train"]][targets[0]].to_numpy()
-        made = []
-        for size in sorted(set(args.learning_curve_sizes)):
-            tag = str(size)   # plain size, so run_learning_curve --fractions 100 200 ... matches
-            for rep in range(args.lc_repeats):
-                rng = np.random.default_rng(size * 1000 + rep)
-                sub_train = _stratified_subsample(fold0["train"], y, size, args.task, rng)
-                d = PIPELINE / "splits" / dataset / f"custom__{tag}_seed{rep}"
-                d.mkdir(parents=True, exist_ok=True)
-                np.save(d / "train_idx.npy", np.asarray(sub_train, dtype=np.int64))
-                np.save(d / "val_idx.npy", np.array(fold0["val"], dtype=np.int64))
-                np.save(d / "test_idx.npy", np.array(fold0["test"], dtype=np.int64))
-            made.append(f"{tag}={min(size, len(fold0['train']))}")
-        print(f"[prep] learning-curve subsets ({args.lc_repeats} repeats each): " + ", ".join(made))
+        _write_learning_curve(dataset, "custom", fold0["train"], fold0["val"], fold0["test"],
+                              y, args.learning_curve_sizes, args.lc_repeats, args.task)
 
     print(f"\n[prep] dataset '{dataset}': {len(cleaned_df)} unique molecules, "
           f"{n_invalid_total} invalid SMILES dropped, {len(fold_idx)} fold(s).")
@@ -188,12 +199,90 @@ def prepare(args):
     return dataset
 
 
+def prepare_from_single_csv(args):
+    """One CSV in -> we scaffold-split it into our two published styles (v1_preshuffle,
+    v2_astartes), each at seeds 0/1/2 (eval) + 3 (HP-only), writing the SAME layout a
+    built-in benchmark dataset has. Downstream `--protocols v1_preshuffle v2_astartes`
+    then behaves identically to a built-in dataset."""
+    from scaffold_splits import SPLITTERS, DEFAULT_SEEDS
+
+    dataset = args.name
+    targets = args.target_cols
+    meta_path = PIPELINE / "cleaned" / f"{dataset}.meta.json"
+    if meta_path.exists() and not json.loads(meta_path.read_text()).get("user_created"):
+        sys.exit(f"[prep] '{dataset}' is a built-in benchmark dataset — pick a different --name.")
+
+    df = pd.read_csv(args.csv)
+    if args.smiles_col not in df.columns:
+        sys.exit(f"[prep] '{args.smiles_col}' not in {args.csv}; columns: {list(df.columns)}")
+    df = df.rename(columns={args.smiles_col: "smiles"})
+    for col in targets:
+        if col not in df.columns:
+            sys.exit(f"[prep] target '{col}' missing from {args.csv}; columns: {list(df.columns)}")
+
+    canon, n_invalid = _canonicalize_and_flag(df["smiles"].tolist())
+    pool_rows, pool_index = [], {}
+    for row_i, smiles in enumerate(canon):
+        if smiles is None or smiles in pool_index:   # drop invalid + dedup (keep first)
+            continue
+        pool_index[smiles] = len(pool_rows)
+        row = {"smiles": smiles}
+        row.update({t: df.iloc[row_i][t] for t in targets})
+        pool_rows.append(row)
+    n_dupes = len(canon) - n_invalid - len(pool_rows)
+
+    cleaned_df = pd.DataFrame(pool_rows, columns=["smiles"] + targets)
+    (PIPELINE / "cleaned").mkdir(exist_ok=True)
+    cleaned_df.to_csv(PIPELINE / "cleaned" / f"{dataset}.csv", index=False)
+    meta = {"dataset": dataset, "task_type": args.task, "target_columns": targets,
+            "n_targets": len(targets), "n_after": len(cleaned_df), "user_created": True}
+    if args.metric:
+        meta["metric"] = args.metric
+        meta["source"] = "tdc"
+    meta_path.write_text(json.dumps(meta, indent=2))
+
+    smiles = cleaned_df["smiles"].tolist()
+    print(f"\n[prep] dataset '{dataset}': {len(cleaned_df)} unique molecules "
+          f"({n_invalid} invalid SMILES dropped, {n_dupes} duplicates merged).")
+    for style in args.split_styles:
+        splitter = SPLITTERS[style]
+        for seed in DEFAULT_SEEDS:
+            tr, va, te = splitter(smiles, seed=seed)
+            sub = PIPELINE / "splits" / dataset / f"{style}_seed{seed}"
+            sub.mkdir(parents=True, exist_ok=True)
+            np.save(sub / "train_idx.npy", tr)
+            np.save(sub / "val_idx.npy", va)
+            np.save(sub / "test_idx.npy", te)
+        s0 = PIPELINE / "splits" / dataset / f"{style}_seed0"
+        ntr, nva, nte = (len(np.load(s0 / f"{r}_idx.npy")) for r in ("train", "val", "test"))
+        print(f"       {style}: seeds {DEFAULT_SEEDS} written (seed0 train {ntr} / val {nva} / test {nte})")
+
+    if args.learning_curve_sizes:   # per style, subsample that style's seed0 train (val/test fixed)
+        for style in args.split_styles:
+            s0 = PIPELINE / "splits" / dataset / f"{style}_seed0"
+            tr = np.load(s0 / "train_idx.npy")
+            va = np.load(s0 / "val_idx.npy")
+            te = np.load(s0 / "test_idx.npy")
+            y = cleaned_df.iloc[tr][targets[0]].to_numpy()
+            _write_learning_curve(dataset, style, tr, va, te, y,
+                                  args.learning_curve_sizes, args.lc_repeats, args.task)
+
+    print(f"\n[prep] next, run BOTH scaffold styles exactly like a built-in dataset:")
+    print(f"       python -m orchestrator.run_benchmark --methods <METHOD> \\")
+    print(f"         --datasets {dataset} --protocols {' '.join(args.split_styles)} --gpus 0,1,2,3")
+    return dataset
+
+
 def main():
     p = argparse.ArgumentParser(description="Adapt user CSVs into the pipeline data format (no re-splitting).")
     p.add_argument("--name", required=True,
                    help="dataset tag; writes cleaned/<name>.csv + splits/<name>/ (must not collide with a built-in dataset).")
     p.add_argument("--train-csv"); p.add_argument("--val-csv"); p.add_argument("--test-csv")
     p.add_argument("--splits-dir", help="dir of fold subdirs each with train/val/test.csv")
+    p.add_argument("--csv", help="a SINGLE csv; we scaffold-split it into both published styles")
+    p.add_argument("--split-styles", nargs="+", default=["v1_preshuffle", "v2_astartes"],
+                   choices=["v1_preshuffle", "v2_astartes"],
+                   help="which scaffold styles to generate from --csv (default: both)")
     p.add_argument("--smiles-col", default="smiles")
     p.add_argument("--target-cols", nargs="+", required=True)
     p.add_argument("--task", required=True, choices=["cls", "reg"])
@@ -202,7 +291,12 @@ def main():
                    help="opt: absolute train sizes for a learning curve, e.g. 100 200 500 1000")
     p.add_argument("--lc-repeats", type=int, default=3, help="random subsample repeats per LC size")
     args = p.parse_args()
-    prepare(args)
+    if args.csv:
+        if args.train_csv or args.val_csv or args.test_csv or args.splits_dir:
+            sys.exit("[prep] --csv (we split) is mutually exclusive with --train/val/test-csv / --splits-dir (you split).")
+        prepare_from_single_csv(args)
+    else:
+        prepare(args)
 
 
 if __name__ == "__main__":

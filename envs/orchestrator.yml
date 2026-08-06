@@ -14,3 +14,6 @@ dependencies:
   - scipy
   - rdkit
   - matplotlib
+  - pip
+  - pip:
+      - astartes[molecules]   # chemprop-v2 scaffold split for prepare_user_data.py --csv (v2_astartes)
