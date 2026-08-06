@@ -93,11 +93,10 @@ dependencies:
       - tensorboard-plugin-wit==1.8.1
       - tensorboardx==2.6.2.2
       - threadpoolctl==3.1.0
-      - nvidia-cusparse-cu11==11.7.5.86   # libcusparse.so.11 for torch_sparse SpMM (motil); ship in-env, not system CUDA
       - torch==1.12.1+cu113
       - torch-geometric==2.0.4
-      - torch-scatter==2.0.9   # prebuilt wheel exists for torch-1.12.1+cu113 (2.1.1 has none -> source compile fails without nvcc)
-      - torch-sparse==0.6.14    # prebuilt wheel exists (0.6.17 has none)
+      - torch-scatter==2.1.0   # +pt112cu113 self-contained wheel (bundles CUDA libs; no system CUDA / libcusparse needed)
+      - torch-sparse==0.6.16    # +pt112cu113 self-contained wheel
       - torchvision==0.13.1
       - tqdm==4.67.3
       - typing-extensions==4.7.1
