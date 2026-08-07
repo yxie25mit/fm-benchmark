@@ -21,7 +21,8 @@ Then run the normal pipeline with the `custom` protocol (see README_PHARMA.md):
 Inputs — one split:
   --train-csv --val-csv --test-csv
 Inputs — many folds (e.g. rolling time splits):
-  --splits-dir DIR   where DIR/<fold>/{train,val,test}.csv
+  --splits-dir DIR   where DIR/<fold>/{train,val,test}.csv (val may also be
+                      named "valid"; files may be .csv (comma) or .tsv (tab))
 Input — a SINGLE csv, we scaffold-split it into BOTH our published styles:
   --csv DATA.csv     writes splits/<name>/{v1_preshuffle,v2_astartes}_seed{0,1,2,3}/
                      Then run with `--protocols v1_preshuffle v2_astartes` exactly like a
@@ -56,21 +57,34 @@ def _canonicalize_and_flag(smiles_list):
 def _read_split_csvs(args):
     """Return [(fold_name, {'train':df,'val':df,'test':df})]; renames the smiles column."""
     def load(path):
-        df = pd.read_csv(path)
+        sep = "\t" if str(path).endswith(".tsv") else ","
+        df = pd.read_csv(path, sep=sep)
         if args.smiles_col not in df.columns:
             sys.exit(f"[prep] '{args.smiles_col}' not in {path}; columns: {list(df.columns)}")
         return df.rename(columns={args.smiles_col: "smiles"})
 
+    def _resolve(sub, stems):
+        for stem in stems:
+            for ext in (".csv", ".tsv"):
+                cand = sub / f"{stem}{ext}"
+                if cand.exists():
+                    return cand
+        return sub / f"{stems[0]}.csv"   # fall back so the missing-file message is sensible
+
     if args.splits_dir:
         folds = []
         for sub in sorted(p for p in Path(args.splits_dir).iterdir() if p.is_dir()):
-            need = {s: sub / f"{s}.csv" for s in ("train", "val", "test")}
+            need = {
+                "train": _resolve(sub, ["train"]),
+                "val":   _resolve(sub, ["val", "valid"]),
+                "test":  _resolve(sub, ["test"]),
+            }
             missing = [str(p) for p in need.values() if not p.exists()]
             if missing:
                 print(f"[prep] skip fold '{sub.name}': missing {missing}"); continue
             folds.append((sub.name, {s: load(p) for s, p in need.items()}))
         if not folds:
-            sys.exit(f"[prep] no fold subdirs with train/val/test.csv under {args.splits_dir}")
+            sys.exit(f"[prep] no fold subdirs with train/val(id)/test .csv/.tsv under {args.splits_dir}")
         return folds
     for role in ("train_csv", "val_csv", "test_csv"):
         if not getattr(args, role):
@@ -278,7 +292,7 @@ def main():
     p.add_argument("--name", required=True,
                    help="dataset tag; writes cleaned/<name>.csv + splits/<name>/ (must not collide with a built-in dataset).")
     p.add_argument("--train-csv"); p.add_argument("--val-csv"); p.add_argument("--test-csv")
-    p.add_argument("--splits-dir", help="dir of fold subdirs each with train/val/test.csv")
+    p.add_argument("--splits-dir", help="dir of fold subdirs each with train/val(id)/test .csv/.tsv")
     p.add_argument("--csv", help="a SINGLE csv; we scaffold-split it into both published styles")
     p.add_argument("--split-styles", nargs="+", default=["v1_preshuffle", "v2_astartes"],
                    choices=["v1_preshuffle", "v2_astartes"],
