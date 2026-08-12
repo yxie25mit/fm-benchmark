@@ -206,6 +206,14 @@ def prepare_from_single_csv(args):
     then behaves identically to a built-in dataset."""
     from scaffold_splits import SPLITTERS, DEFAULT_SEEDS
 
+    if "v2_astartes" in args.split_styles:   # fail fast, before writing anything
+        try:
+            import astartes  # noqa: F401
+        except ImportError:
+            sys.exit("[prep] the v2_astartes split needs the 'astartes' package in this (orchestrator) env.\n"
+                     "       Install it:   pip install 'astartes[molecules]'\n"
+                     "       (or generate only the v1 style with:  --split-styles v1_preshuffle)")
+
     dataset = args.name
     targets = args.target_cols
     meta_path = PIPELINE / "cleaned" / f"{dataset}.meta.json"
@@ -273,6 +281,141 @@ def prepare_from_single_csv(args):
     return dataset
 
 
+def _write_single_fold_dataset(sub_name, pool_df, targets, task, metric, train, val, test):
+    """Write one single-fold `custom` dataset: cleaned/<sub>.csv + meta + one custom_seed0
+    split. Single fold => the pipeline selects HP on THIS fold's own validation (no pooling),
+    which is what makes the sliding-window folds leakage-free."""
+    (PIPELINE / "cleaned").mkdir(exist_ok=True)
+    pool_df.to_csv(PIPELINE / "cleaned" / f"{sub_name}.csv", index=False)
+    meta = {"dataset": sub_name, "task_type": task, "target_columns": targets,
+            "n_targets": len(targets), "n_after": len(pool_df), "user_created": True}
+    if metric:
+        meta["metric"] = metric
+        meta["source"] = "tdc"
+    (PIPELINE / "cleaned" / f"{sub_name}.meta.json").write_text(json.dumps(meta, indent=2))
+    d = PIPELINE / "splits" / sub_name / "custom_seed0"
+    d.mkdir(parents=True, exist_ok=True)
+    np.save(d / "train_idx.npy", np.asarray(train, dtype=np.int64))
+    np.save(d / "val_idx.npy", np.asarray(val, dtype=np.int64))
+    np.save(d / "test_idx.npy", np.asarray(test, dtype=np.int64))
+
+
+def _write_multifold_dataset(sub_name, pool_df, targets, task, metric, folds, hp_per_fold):
+    """Write one multi-fold `custom` dataset (custom_seed0..K-1). hp_per_fold=True stamps the
+    meta so run_phase tunes each fold on its OWN validation (not the mean across folds)."""
+    (PIPELINE / "cleaned").mkdir(exist_ok=True)
+    pool_df.to_csv(PIPELINE / "cleaned" / f"{sub_name}.csv", index=False)
+    meta = {"dataset": sub_name, "task_type": task, "target_columns": targets,
+            "n_targets": len(targets), "n_after": len(pool_df), "user_created": True}
+    if metric:
+        meta["metric"] = metric
+        meta["source"] = "tdc"
+    if hp_per_fold:
+        meta["hp_per_fold"] = True
+    (PIPELINE / "cleaned" / f"{sub_name}.meta.json").write_text(json.dumps(meta, indent=2))
+    for i, (train, val, test) in enumerate(folds):
+        d = PIPELINE / "splits" / sub_name / f"custom_seed{i}"
+        d.mkdir(parents=True, exist_ok=True)
+        np.save(d / "train_idx.npy", np.asarray(train, dtype=np.int64))
+        np.save(d / "val_idx.npy", np.asarray(val, dtype=np.int64))
+        np.save(d / "test_idx.npy", np.asarray(test, dtype=np.int64))
+
+
+def _write_time_lc(sub_name, folds, sizes):
+    """Recency-nested learning-curve subsets per sliding fold: train = the most-recent `size` rows
+    of that fold's (time-sorted) train window — nested suffixes (last-k ⊂ last-2k ⊂ …) — with the
+    fold's val/test held fixed. Written as custom__<size>_seed<fold> so:
+      run_learning_curve.py --datasets <sub_name> --protocols custom --fractions <sizes> --seeds 0..K-1
+    loads them and collect_results.py --learning-curve averages mean±std across the folds at each size."""
+    for fold_i, (train, val, test) in enumerate(folds):
+        train = np.asarray(train, dtype=np.int64)   # ascending == time order; most-recent = tail
+        for size in sorted(set(sizes)):
+            k = min(size, len(train))
+            d = PIPELINE / "splits" / sub_name / f"custom__{size}_seed{fold_i}"
+            d.mkdir(parents=True, exist_ok=True)
+            np.save(d / "train_idx.npy", train[-k:])
+            np.save(d / "val_idx.npy", np.asarray(val, dtype=np.int64))
+            np.save(d / "test_idx.npy", np.asarray(test, dtype=np.int64))
+    full = len(folds[0][0])
+    caps = ", ".join(f"{s}(->{min(s, full)})" for s in sorted(set(sizes)))
+    print(f"[prep] {sub_name} learning curve (recency-nested, {len(folds)} folds, capped at train={full}): {caps}")
+
+
+def prepare_time_split(args):
+    """One time-sorted CSV in -> a chronological 80/10/10 split (<name>_chrono) plus
+    constant-train sliding windows (<name>_tw0..K), each emitted as its own single-fold
+    dataset so the normal hp_search/hp_final tunes each on its OWN validation (leakage-free).
+    Then aggregate the _tw* test scores for the sliding-window mean±std."""
+    from time_splits import chrono_split, sliding_windows
+
+    dataset = args.name
+    targets = args.target_cols
+    for sub in (f"{dataset}_chrono", f"{dataset}_sliding"):
+        mp = PIPELINE / "cleaned" / f"{sub}.meta.json"
+        if mp.exists() and not json.loads(mp.read_text()).get("user_created"):
+            sys.exit(f"[prep] '{sub}' collides with a built-in dataset — pick a different --name.")
+
+    df = pd.read_csv(args.csv)
+    if args.smiles_col not in df.columns:
+        sys.exit(f"[prep] '{args.smiles_col}' not in {args.csv}; columns: {list(df.columns)}")
+    df = df.rename(columns={args.smiles_col: "smiles"})
+    for col in targets:
+        if col not in df.columns:
+            sys.exit(f"[prep] target '{col}' missing from {args.csv}; columns: {list(df.columns)}")
+    if args.date_col:
+        if args.date_col not in df.columns:
+            sys.exit(f"[prep] --date-col '{args.date_col}' not in {args.csv}; columns: {list(df.columns)}")
+        df = df.sort_values(args.date_col, kind="stable").reset_index(drop=True)
+
+    canon, n_invalid = _canonicalize_and_flag(df["smiles"].tolist())
+    pool_rows, seen = [], set()
+    for row_i, smiles in enumerate(canon):
+        if smiles is None or smiles in seen:   # drop invalid + dedup, keeping EARLIEST occurrence
+            continue
+        seen.add(smiles)
+        row = {"smiles": smiles}
+        row.update({t: df.iloc[row_i][t] for t in targets})
+        pool_rows.append(row)
+    n_dupes = len(canon) - n_invalid - len(pool_rows)
+    pool_df = pd.DataFrame(pool_rows, columns=["smiles"] + targets)
+    n = len(pool_df)
+
+    sort_note = f"sorted by '{args.date_col}'" if args.date_col else "using input row order (assumed time-sorted)"
+    print(f"\n[prep] time-split '{dataset}': {n} unique molecules {sort_note} "
+          f"({n_invalid} invalid dropped, {n_dupes} duplicates merged, earliest kept).")
+
+    tr, va, te = chrono_split(n)
+    _write_single_fold_dataset(f"{dataset}_chrono", pool_df, targets, args.task, args.metric, tr, va, te)
+    print(f"       {dataset}_chrono: 80/10/10 chronological (train {len(tr)} / val {len(va)} / test {len(te)})")
+
+    folds = sliding_windows(n, n_chunks=args.tw_chunks, train_chunks=args.tw_train_chunks, n_folds=args.tw_folds)
+    _write_multifold_dataset(f"{dataset}_sliding", pool_df, targets, args.task, args.metric, folds, hp_per_fold=True)
+    for i, (tr, va, te) in enumerate(folds):
+        print(f"       {dataset}_sliding fold {i}: train {len(tr)} / val {len(va)} / test {len(te)} "
+              f"(tests newest chunk {args.tw_train_chunks + i + 2}/{args.tw_chunks})")
+    print(f"       -> {dataset}_sliding meta sets hp_per_fold=True (each fold tuned on its OWN val).")
+    if args.learning_curve_sizes:
+        _write_time_lc(f"{dataset}_sliding", folds, args.learning_curve_sizes)
+
+    print(f"\n[prep] next — tune + evaluate (each fold tuned on its OWN validation, leakage-free):")
+    print(f"       # headline chronological number (single 80/10/10 fold):")
+    print(f"       python -m orchestrator.run_benchmark --methods <METHOD> \\")
+    print(f"         --datasets {dataset}_chrono --protocols custom --phases hp_search hp_final --gpus 0,1,2,3")
+    print(f"       # sliding-window error bars ({len(folds)} folds, per-fold HP is automatic):")
+    print(f"       python -m orchestrator.run_benchmark --methods <METHOD> \\")
+    print(f"         --datasets {dataset}_sliding --protocols custom --phases hp_search hp_final --gpus 0,1,2,3")
+    print(f"       # combined table (chrono headline + sliding mean±std):")
+    print(f"       python collect_time_split.py --name {dataset} --phase hp_final --methods <METHOD>")
+    if args.learning_curve_sizes:
+        sizes = " ".join(str(s) for s in sorted(set(args.learning_curve_sizes)))
+        print(f"       # learning curve on the sliding folds (recency-nested; error bars across {len(folds)} folds):")
+        print(f"       python runners/run_learning_curve.py --methods <METHOD> --datasets {dataset}_sliding \\")
+        print(f"         --protocols custom --fractions {sizes} --seeds 0 1 2 --ensemble 5 --gpus 0,1,2,3")
+        print(f"       python collect_results.py --dataset {dataset}_sliding --protocol custom --learning-curve \\")
+        print(f"         --methods <METHOD> --out {dataset}_curve.csv --plot {dataset}_curve.png")
+    return dataset
+
+
 def main():
     p = argparse.ArgumentParser(description="Adapt user CSVs into the pipeline data format (no re-splitting).")
     p.add_argument("--name", required=True,
@@ -283,6 +426,16 @@ def main():
     p.add_argument("--split-styles", nargs="+", default=["v1_preshuffle", "v2_astartes"],
                    choices=["v1_preshuffle", "v2_astartes"],
                    help="which scaffold styles to generate from --csv (default: both)")
+    p.add_argument("--time-split", action="store_true",
+                   help="with --csv: chronological instead of scaffold. Emits <name>_chrono "
+                        "(80/10/10) + <name>_tw0..K (constant-train sliding windows).")
+    p.add_argument("--date-col", help="time-split: column to sort by (else input row order is used)")
+    p.add_argument("--tw-chunks", type=int, default=12,
+                   help="time-split sliding: cut time-sorted rows into this many equal-count chunks (default 12)")
+    p.add_argument("--tw-train-chunks", type=int, default=8,
+                   help="time-split sliding: each fold trains on this many consecutive chunks, constant window (default 8)")
+    p.add_argument("--tw-folds", type=int, default=3,
+                   help="time-split sliding: number of sliding folds; needs tw-chunks >= tw-train-chunks + tw-folds + 1 (default 3)")
     p.add_argument("--smiles-col", default="smiles")
     p.add_argument("--target-cols", nargs="+", required=True)
     p.add_argument("--task", required=True, choices=["cls", "reg"])
@@ -294,7 +447,10 @@ def main():
     if args.csv:
         if args.train_csv or args.val_csv or args.test_csv or args.splits_dir:
             sys.exit("[prep] --csv (we split) is mutually exclusive with --train/val/test-csv / --splits-dir (you split).")
-        prepare_from_single_csv(args)
+        if args.time_split:
+            prepare_time_split(args)
+        else:
+            prepare_from_single_csv(args)
     else:
         prepare(args)
 

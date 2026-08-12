@@ -299,6 +299,96 @@ def pick_best_hp(phase_dir, dataset):
     return best_id, best_hp, best_score
 
 
+def _hp_per_fold_enabled(dataset, cli_flag):
+    """Per-fold HP selection is on if the CLI flag is set OR the dataset's meta declares it
+    (prepare_user_data --time-split sets hp_per_fold on the sliding dataset)."""
+    if cli_flag:
+        return True
+    meta = json.loads((PIPELINE / "cleaned" / f"{dataset}.meta.json").read_text())
+    return bool(meta.get("hp_per_fold"))
+
+
+def _hp_val_scorer(dataset):
+    """Return (score_fn(seed_em0_dir)->val|None, minimize), matching pick_best_hp's metric
+    handling (TDC prescribed metric, else task-type default)."""
+    meta = json.loads((PIPELINE / "cleaned" / f"{dataset}.meta.json").read_text())
+    is_tdc = meta.get("source") == "tdc"
+    metric_name = meta.get("metric")
+    if is_tdc:
+        from _tdc_metrics import maximize as _tdc_max, score as _tdc_score
+        minimize = not _tdc_max(metric_name)
+
+        def score(seed_dir):
+            pv, lv = seed_dir / "pred_val.npy", seed_dir / "labels_val.npy"
+            return _tdc_score(np.load(pv), np.load(lv), metric_name) if pv.exists() and lv.exists() else None
+    else:
+        minimize = meta["task_type"] == "reg"
+
+        def score(seed_dir):
+            mj = seed_dir / "metrics.json"
+            return json.loads(mj.read_text()).get("val_metric") if mj.exists() else None
+    return score, minimize
+
+
+def pick_best_hp_per_fold(phase_dir, dataset, protocol):
+    """For EACH fold (eval seed), pick the config best on THAT fold's OWN seed{seed}_em0
+    validation — never a mean across folds. This is the anti-leakage rule for time-sliding
+    folds: a later fold's validation is an earlier fold's test, so pooling validation would
+    tune on data you later test. Returns {str(seed): {id, hp, val_score}}."""
+    score_fn, minimize = _hp_val_scorer(dataset)
+    winners = {}
+    for s in _eval_seeds(dataset, protocol):
+        best = None
+        for cfg_dir in phase_dir.iterdir():
+            if not cfg_dir.is_dir() or not (cfg_dir / "_hp.json").exists():
+                continue
+            v = score_fn(cfg_dir / f"seed{s}_em0")
+            if v is None:
+                continue
+            if best is None or (minimize and v < best[0]) or (not minimize and v > best[0]):
+                best = (v, cfg_dir.name, json.loads((cfg_dir / "_hp.json").read_text()))
+        if best is None:
+            print(f"  ERROR: no config has a validation score for fold seed{s} in {phase_dir}.")
+        else:
+            winners[str(s)] = {"id": best[1], "hp": best[2], "val_score": best[0]}
+    return winners
+
+
+def build_hp_final_jobs_per_fold(method, dataset, protocol, phase_dir, epochs, gpus, folds):
+    """Each fold trains ITS OWN winning config (folds may differ) at phase_dir/<id>/seed{s}_em*."""
+    jobs, i = [], 0
+    for s in _eval_seeds(dataset, protocol):
+        w = folds.get(str(s))
+        if w is None:
+            continue
+        for em in range(ENSEMBLE_SIZE):
+            out = phase_dir / w["id"] / f"seed{s}_em{em}"
+            jobs.append(Job(method, dataset, protocol, s, w["hp"], w["id"],
+                            em, epochs, out, gpus[i % len(gpus)]))
+            i += 1
+    return jobs
+
+
+def aggregate_phase_per_fold(method, dataset, protocol, phase_dir, folds):
+    """Like aggregate_phase, but each fold's seeds live under its OWN winner's id dir."""
+    meta = json.loads((PIPELINE / "cleaned" / f"{dataset}.meta.json").read_text())
+    task_type, qm = meta["task_type"], dataset in ("qm7", "qm8", "qm9")
+    prescribed_metric = meta["metric"] if meta.get("source") == "tdc" else None
+    per_seed_am, per_seed_gm, used = [], [], {}
+    for s in _eval_seeds(dataset, protocol):
+        w = folds.get(str(s))
+        if w is None:
+            continue
+        seed_dirs = sorted((phase_dir / w["id"]).glob(f"seed{s}_em*"))
+        am, gm, _ = ensemble_metric_for_seed(seed_dirs, task_type, qm, metric=prescribed_metric)
+        per_seed_am.append(am); per_seed_gm.append(gm); used[str(s)] = w["id"]
+    return {
+        "per_seed_am": per_seed_am, "agg_am": cross_seed_summary(per_seed_am),
+        "per_seed_gm": per_seed_gm, "agg_gm": cross_seed_summary(per_seed_gm),
+        "per_fold_hp": used,
+    }
+
+
 # ---------------------------------------------------------------------------
 def main():
     p = argparse.ArgumentParser()
@@ -318,6 +408,10 @@ def main():
                    help="Jobs per GPU (cross-cell parallelism). max_workers = len(gpus)*jobs_per_gpu.")
     p.add_argument("--max-configs", type=int, default=None,
                    help="(hp_search only) cap number of HP configs (smoke testing).")
+    p.add_argument("--hp-per-fold", action="store_true",
+                   help="Select HPs per fold on each fold's OWN validation instead of the mean "
+                        "across folds. Auto-on for datasets whose meta sets hp_per_fold (the "
+                        "--time-split sliding dataset). Prevents temporal HP leakage across folds.")
     args = p.parse_args()
 
     gpus = [int(g) for g in args.gpus.split(",")]
@@ -344,9 +438,13 @@ def main():
                     print(f"  WARN: skipping hp_final {dataset}/{protocol}: best_hp.json missing")
                     continue
                 rec = json.loads(best_hp_path.read_text())
-                cell_jobs = build_hp_final_jobs(args.method, dataset, protocol,
-                                                phase_dir, epochs, gpus,
-                                                rec["hp"], rec["id"])
+                if rec.get("per_fold"):
+                    cell_jobs = build_hp_final_jobs_per_fold(args.method, dataset, protocol,
+                                                             phase_dir, epochs, gpus, rec["folds"])
+                else:
+                    cell_jobs = build_hp_final_jobs(args.method, dataset, protocol,
+                                                    phase_dir, epochs, gpus,
+                                                    rec["hp"], rec["id"])
             all_jobs.extend(cell_jobs)
 
     # GPU is assigned dynamically at run time from a slot pool (see run_job /
@@ -367,18 +465,29 @@ def main():
                 summary = aggregate_phase(args.method, dataset, protocol,
                                           phase_dir, "default")
             elif args.phase == "hp_search":
-                best_id, best_hp, best_score = pick_best_hp(phase_dir, dataset)
-                summary = {"best_id": best_id, "best_hp": best_hp, "best_val_score": best_score}
-                if best_hp is not None:
-                    (phase_root / "best_hp.json").write_text(json.dumps(
-                        {"hp": best_hp, "id": best_id, "val_score": best_score}, indent=2))
+                if _hp_per_fold_enabled(dataset, args.hp_per_fold):
+                    folds = pick_best_hp_per_fold(phase_dir, dataset, protocol)
+                    summary = {"per_fold": True, "folds": folds}
+                    if folds:
+                        (phase_root / "best_hp.json").write_text(
+                            json.dumps({"per_fold": True, "folds": folds}, indent=2))
+                else:
+                    best_id, best_hp, best_score = pick_best_hp(phase_dir, dataset)
+                    summary = {"best_id": best_id, "best_hp": best_hp, "best_val_score": best_score}
+                    if best_hp is not None:
+                        (phase_root / "best_hp.json").write_text(json.dumps(
+                            {"hp": best_hp, "id": best_id, "val_score": best_score}, indent=2))
             elif args.phase == "hp_final":
                 best_hp_path = phase_root / "best_hp.json"
                 if not best_hp_path.exists():
                     continue
                 rec = json.loads(best_hp_path.read_text())
-                summary = aggregate_phase(args.method, dataset, protocol,
-                                          phase_dir, rec["id"])
+                if rec.get("per_fold"):
+                    summary = aggregate_phase_per_fold(args.method, dataset, protocol,
+                                                       phase_dir, rec["folds"])
+                else:
+                    summary = aggregate_phase(args.method, dataset, protocol,
+                                              phase_dir, rec["id"])
             (phase_dir / "_summary.json").write_text(json.dumps(summary, indent=2, default=str))
             am = summary.get("agg_am", {}).get("mean") if isinstance(summary, dict) else None
             print(f"  {args.method}/{dataset}/{protocol}/{args.phase}: agg_am={am}")

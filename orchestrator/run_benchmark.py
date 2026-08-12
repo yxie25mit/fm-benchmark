@@ -34,7 +34,8 @@ def cell_done(method, dataset, protocol, phase):
     return summary.exists()
 
 
-def run_method_phase(method, datasets, protocols, phase, gpus, jobs_per_gpu, epochs, max_configs=None):
+def run_method_phase(method, datasets, protocols, phase, gpus, jobs_per_gpu, epochs,
+                     max_configs=None, hp_per_fold=False):
     """Run one (method, phase, protocols) bundle with cross-cell pooling.
     run_phase.py pools jobs from ALL listed (dataset × protocol) cells into a
     single ThreadPoolExecutor of size len(gpus)*jobs_per_gpu."""
@@ -51,6 +52,8 @@ def run_method_phase(method, datasets, protocols, phase, gpus, jobs_per_gpu, epo
         cmd += ["--epochs", str(epochs)]
     if max_configs and phase == "hp_search":
         cmd += ["--max-configs", str(max_configs)]
+    if hp_per_fold:
+        cmd += ["--hp-per-fold"]
     print(f"\n>>> {method} / {phase} / {len(datasets)} datasets × {len(protocols)} protocols  "
           f"(gpus={gpus} jobs/gpu={jobs_per_gpu})")
     return subprocess.run(cmd).returncode
@@ -66,6 +69,9 @@ def main():
                    choices=["default", "hp_search", "hp_final"])
     p.add_argument("--max-configs", type=int, default=None,
                    help="(hp_search only) cap HP configs — for smoke/scale tests.")
+    p.add_argument("--hp-per-fold", action="store_true",
+                   help="Select HPs per fold on each fold's own validation (not mean across folds). "
+                        "Auto-on for --time-split sliding datasets; prevents temporal HP leakage.")
     p.add_argument("--gpus", default="0", help="comma-separated, e.g. '0,1,2,3'")
     p.add_argument("--jobs-per-gpu", type=int, default=2,
                    help="Concurrent jobs per GPU. Total workers = len(gpus) × jobs_per_gpu.")
@@ -129,7 +135,7 @@ def main():
             continue
         rc = run_method_phase(method, args.datasets, [protocol], phase,
                               args.gpus, args.jobs_per_gpu, epochs_map[phase],
-                              max_configs=args.max_configs)
+                              max_configs=args.max_configs, hp_per_fold=args.hp_per_fold)
         ran += 1
         if rc != 0:
             failed += 1

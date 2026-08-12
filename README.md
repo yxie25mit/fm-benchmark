@@ -230,25 +230,133 @@ approximate prospective performance reasonably well.) This runs the *same* `v1_p
 `v2_astartes` code we run on the benchmark datasets (verified to reproduce them byte-for-byte), at
 seeds 0/1/2 (eval) + 3 (HP-only) each, so your numbers line up with ours.
 ```bash
-# 1) split: one CSV -> splits/mydata/{v1_preshuffle,v2_astartes}_seed{0,1,2,3}/ + cleaned/mydata.csv
+# 1) SPLIT: one CSV -> splits/mydata/{v1_preshuffle,v2_astartes}_seed{0,1,2,3}/ + cleaned/mydata.csv
 python prepare_user_data.py --name mydata --csv mydata.csv \
   --smiles-col SMILES --target-cols activity --task cls   # --metric optional; --task reg for regression
 
-# 2) run — downstream is IDENTICAL to a built-in dataset (just name your dataset + both protocols)
+# 2) RUN — downstream is IDENTICAL to a built-in dataset. Run ONE of the two phases (or both):
+
+# 2a) DEFAULT HPs (fast: each method's default HPs, one 5-model ensemble per fold)
 python -m orchestrator.run_benchmark --methods chemeleon chemprop2 molclr \
   --datasets mydata --protocols v1_preshuffle v2_astartes --phases default \
   --gpus 0,1,2,3 --jobs-per-gpu 1
 
-# 3) collect — one comparison table per split style (mean ± std over the 3 eval seeds)
+# 2b) TUNED HPs (grid search; best config by mean validation across the 3 eval seeds, then final ensembles)
+python -m orchestrator.run_benchmark --methods chemeleon chemprop2 molclr \
+  --datasets mydata --protocols v1_preshuffle v2_astartes --phases hp_search hp_final \
+  --gpus 0,1,2,3 --jobs-per-gpu 1
+
+# 3) COLLECT — one table per split style (mean ± std over the 3 eval seeds). Match --phase to the run.
+#    after 2a (default):
 python collect_results.py --dataset mydata --protocol v1_preshuffle --phase default \
-  --methods chemeleon chemprop2 molclr --out mydata_v1.csv
-python collect_results.py --dataset mydata --protocol v2_astartes --phase default \
-  --methods chemeleon chemprop2 molclr --out mydata_v2.csv
+  --methods chemeleon chemprop2 molclr --out mydata_v1_default.csv
+python collect_results.py --dataset mydata --protocol v2_astartes  --phase default \
+  --methods chemeleon chemprop2 molclr --out mydata_v2_default.csv
+#    after 2b (tuned):
+python collect_results.py --dataset mydata --protocol v1_preshuffle --phase hp_final \
+  --methods chemeleon chemprop2 molclr --out mydata_v1_hpfinal.csv
+python collect_results.py --dataset mydata --protocol v2_astartes  --phase hp_final \
+  --methods chemeleon chemprop2 molclr --out mydata_v2_hpfinal.csv
 ```
+- `molformer` must use `--jobs-per-gpu 1`; the others tolerate 2–4.
 - Same flags as the adapter above: multitask (several `--target-cols`), `--metric`, and
   `--learning-curve-sizes` / `--lc-repeats` (subsets are generated per style; then
   `run_learning_curve.py --protocols v1_preshuffle v2_astartes --fractions <sizes>`).
 - Invalid SMILES dropped and exact duplicates merged (both reported); everything else is scaffold-split.
-- Tuned HPs: swap `--phases default` for `--phases hp_search hp_final`. One style only: `--split-styles v1_preshuffle`.
+- One style only: add `--split-styles v1_preshuffle` at split time and drop the other from `--protocols`.
 - Requires `astartes` in the orchestrator env (in `envs/orchestrator.yml`; `pip install 'astartes[molecules]'`
   if you built that env before this was added).
+
+---
+
+## Time splits (chronological) on your own data
+If you have reliable timestamps, a **time split** is the most realistic (prospective) evaluation.
+Give us **one time-sorted CSV** (or any CSV plus a `--date-col`) and we generate two designs, matching
+how chemprop reports time-split results:
+
+- **`<name>_chrono`** — a single **80/10/10 chronological split** (earliest → train, latest → test).
+  One fold; the headline prospective number.
+- **`<name>_sliding`** — **constant-train sliding windows** for error bars (default: 12 chunks,
+  train 8 / val 1 / test 1, sliding by 1 → 3 folds testing the newest chunks). Train size is held
+  **constant** across folds (unlike an expanding window), so the fold-to-fold spread is interpretable.
+
+**Per-fold HP tuning (the anti-leakage flag, on by default for sliding).** For the sliding dataset,
+each fold is tuned on **its own validation only** — never the mean validation across folds. This is
+essential for time splits: a later fold's validation is an earlier fold's *test*, so pooling validation
+across folds (or reusing the 80/10/10 HPs) would select hyperparameters on data you later test on.
+Per-fold tuning avoids that — every fold's validation strictly precedes its own test. `--time-split`
+stamps `hp_per_fold` on `<name>_sliding`, so `run_phase` does this automatically; you can also force it
+anywhere with `--hp-per-fold` on `run_benchmark`. (Without it, multi-fold `custom` datasets pick one HP
+by mean validation, TDC-style — correct for scaffold folds, **leaky** for time folds.)
+
+```bash
+# 1) SPLIT: one time-sorted CSV -> mydata_chrono (1 fold) + mydata_sliding (3 folds, hp_per_fold=True)
+python prepare_user_data.py --name mydata --csv mydata.csv \
+  --smiles-col SMILES --target-cols activity --task cls \
+  --time-split --date-col assay_date          # omit --date-col if the CSV is already time-sorted
+
+# 2) RUN both datasets together, in ONE phase (or both). run_benchmark applies per-fold HP to
+#    mydata_sliding automatically (its meta) and normal selection to mydata_chrono.
+
+# 2a) DEFAULT HPs (fast; no tuning, so the per-fold-HP question doesn't arise)
+python -m orchestrator.run_benchmark --methods chemprop2 molclr \
+  --datasets mydata_chrono mydata_sliding --protocols custom --phases default \
+  --gpus 0,1,2,3 --jobs-per-gpu 1
+
+# 2b) TUNED HPs (chrono tuned on its own val; sliding tuned PER FOLD on each fold's own val, automatic)
+python -m orchestrator.run_benchmark --methods chemprop2 molclr \
+  --datasets mydata_chrono mydata_sliding --protocols custom --phases hp_search hp_final \
+  --gpus 0,1,2,3 --jobs-per-gpu 1
+
+# 3) COMBINED TABLE (chrono headline + sliding mean±std). Match --phase to the run:
+python collect_time_split.py --name mydata --phase default  --methods chemprop2 molclr   # after 2a
+python collect_time_split.py --name mydata --phase hp_final --methods chemprop2 molclr   # after 2b
+```
+- `molformer` must use `--jobs-per-gpu 1`; the others tolerate 2–4.
+- **Same data flags as the other modes** (all valid with `--time-split`): `--task cls|reg` (required),
+  `--target-cols` (one column, or several for a multitask model), `--metric` (optional; else ROC-AUC for
+  cls / RMSE for reg — case-insensitive, e.g. `roc_auc`/`pr_auc`/`rmse`/`mae`/`spearman`/`pearson`),
+  `--smiles-col` (default `smiles`). Blank label cells = missing (NaN-aware). Both emitted datasets
+  (`_chrono`, `_sliding`) inherit these. (`--split-styles` is scaffold-only. `--learning-curve-sizes` **is**
+  supported — see the learning-curve block below; `--lc-repeats` is ignored for time splits because the
+  3 sliding folds already provide the replicates.)
+- **Window geometry** (defaults shown): `--tw-chunks 12` cuts the time-sorted rows into 12 equal-count
+  chunks; `--tw-train-chunks 8` = each fold trains on 8 consecutive chunks (**constant** window);
+  `--tw-folds 3` = number of sliding folds. With the defaults that gives:
+  fold 0 = train chunks **1–8**, val **9**, test **10**; fold 1 = train **2–9**, val **10**, test **11**;
+  fold 2 = train **3–10**, val **11**, test **12**. (Needs `tw-chunks ≥ tw-train-chunks + tw-folds + 1`.)
+- `--date-col` sorts the CSV by that column; without it, rows are assumed already oldest→newest.
+- `--phases default` has no HP tuning, so no leakage concern; `--hp-per-fold` only matters for the tuned
+  path (and is already automatic for `mydata_sliding`). No `astartes` needed here (time order comes from
+  your data, not scaffolds).
+
+### Learning curve (how performance scales with training-set size)
+Add `--learning-curve-sizes` at split time. This builds **recency-nested** training subsets on the
+**sliding folds** — at each size, each fold trains on its most-recent *N* rows (nested suffixes:
+last-100 ⊂ last-200 ⊂ …) with that fold's val/test fixed — so the curve answers "how much recent
+history do I need." The **error bars come from the 3 folds** (the analog of the 3 seeds on MoleculeNet),
+and sizes are capped at each fold's train-window size. Learning curves use **default HPs** (no per-size
+tuning), so there is no leakage concern.
+```bash
+# 1) split, adding sizes (generates mydata_sliding/custom__<size>_seed{0,1,2}, recency-nested)
+python prepare_user_data.py --name mydata --csv mydata.csv \
+  --smiles-col SMILES --target-cols activity --task cls \
+  --time-split --date-col assay_date --learning-curve-sizes 100 200 500 1000
+
+# 2) run the curve on the sliding folds (5-model ensemble per point; error bars across the 3 folds)
+python runners/run_learning_curve.py --methods chemprop2 molclr --datasets mydata_sliding \
+  --protocols custom --fractions 100 200 500 1000 --seeds 0 1 2 --ensemble 5 --gpus 0,1,2,3
+
+# 3) collect (mean±std over the 3 folds at each size) + plot
+python collect_results.py --dataset mydata_sliding --protocol custom --learning-curve \
+  --methods chemprop2 molclr --out mydata_curve.csv --plot mydata_curve.png
+```
+- **`--fractions` must match the `--learning-curve-sizes` you split with**, and **`--protocols custom`**
+  (the sliding dataset's splits live under `custom__<size>_seed<fold>`).
+- **`--seeds 0 1 2` are the 3 sliding folds** — they must match `--tw-folds`. Passing fewer (e.g. the
+  default `--seeds 0`) runs only some folds and you lose the error bars. `--ensemble 5` matches the
+  5-model ensembles used elsewhere (use fewer only for a quick preview).
+- Sizes are **capped at each fold's train-window size** (~`tw-train-chunks/tw-chunks` of your data, so
+  ~67% by default). To anchor the curve at the full window, include a size ≥ that (it caps to 100%).
+- Run it on **`mydata_sliding`** (not `_chrono`): the curve's error bars come from the 3 folds. `molformer`
+  needs `--jobs-per-gpu 1` here too.
