@@ -320,7 +320,13 @@ def _hp_val_scorer(dataset):
 
         def score(seed_dir):
             pv, lv = seed_dir / "pred_val.npy", seed_dir / "labels_val.npy"
-            return _tdc_score(np.load(pv), np.load(lv), metric_name) if pv.exists() and lv.exists() else None
+            if pv.exists() and lv.exists():
+                return _tdc_score(np.load(pv), np.load(lv), metric_name)
+            # molfcl/motil (and some molformer modes) don't dump val preds — fall back to their
+            # scalar val_metric, exactly like pick_best_hp does. Its direction matches the task
+            # (reg: lower rmse/mae; cls: higher auc), consistent with `minimize` above.
+            mj = seed_dir / "metrics.json"
+            return json.loads(mj.read_text()).get("val_metric") if mj.exists() else None
     else:
         minimize = meta["task_type"] == "reg"
 
