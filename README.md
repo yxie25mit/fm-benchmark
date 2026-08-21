@@ -330,6 +330,8 @@ python export_time_split.py --name mydata --methods chemprop2 molclr --phases de
   dataset sizes + diversity/novelty) as aggregate numbers; no molecule-level data is included. Drop
   `--diversity` if you don't want the chemistry-coverage metrics (they need `rdkit`, already in the
   orchestrator env).
+- **Ran scaffold splits too?** One export can aggregate **both scaffold and time splits into a single
+  JSON** — see [Package everything to send back](#package-everything-to-send-back--one-json-aggregates-over-all-your-splits).
 - **`--jobs-per-gpu`**: pass **`auto`** (recommended) to size it to your GPU — it measures one job's
   peak memory and fits as many as the card holds (adapts to 48/80 GB, safety 0.85). If a run still
   OOMs, it steps concurrency **down to the largest width that still fits** — by 1 first (so memory
@@ -385,3 +387,53 @@ python collect_results.py --dataset mydata_sliding --protocol custom --learning-
   ~67% by default). To anchor the curve at the full window, include a size ≥ that (it caps to 100%).
 - Run it on **`mydata_sliding`** (not `_chrono`): the curve's error bars come from the 3 folds. `molformer`
   needs `--jobs-per-gpu 1` here too.
+
+---
+
+## Package everything to send back — ONE JSON (aggregates over all your splits)
+`export_time_split.py` bundles a whole benchmark run into **one scalar-only JSON** — the single file you
+send back (no predictions, labels, or SMILES ever leave your side). **One file aggregates over every split
+you ran.** Pick the command that matches what you did:
+
+**A) You ran only the time splits** (`mydata_chrono` + `mydata_sliding`):
+```bash
+python export_time_split.py --name mydata \
+  --methods chemeleon chemprop2 molclr molformer --phases default \
+  --diversity --out mydata_share.json
+```
+
+**B) You ran the scaffold splits too** — this one file covers **time + scaffold together**:
+```bash
+python export_time_split.py \
+  --datasets mydata mydata_chrono mydata_sliding \
+  --protocols custom v1_preshuffle v2_astartes \
+  --methods chemeleon chemprop2 molclr molformer --phases default \
+  --diversity --out mydata_share.json
+```
+Command **B** lists every dataset the adapter produced and every protocol you ran; **any
+`(dataset × protocol)` combo you didn't run is skipped automatically**, so it's always safe to list them
+all. (Command **A** is just the shorthand for the two time datasets @ `custom`.)
+
+What lands in `mydata_share.json` — aggregated over all the splits you ran (all four, for command **B**):
+
+| split | in the JSON as | comes from |
+| --- | --- | --- |
+| scaffold `v1_preshuffle` | `mydata@v1_preshuffle` | `## Reproducing our scaffold splits` |
+| scaffold `v2_astartes` | `mydata@v2_astartes` | `## Reproducing our scaffold splits` |
+| time chronological | `mydata_chrono@custom` | `## Time splits (chronological)` |
+| time sliding window | `mydata_sliding@custom` | `## Time splits (chronological)` |
+
+For each of those cells the file stores: **per-seed × per-ensemble-member** val *and* test metrics, the
+**per-fold ensembled** score + mean/std (per-target too, for multitask), the **chosen HPs** (per-fold for
+the sliding windows), per-fold **train/val/test sizes** and **class balance**, ensemble **completeness**
+(found vs expected — flags any partial/crashed cell), **provenance** (git commit + timestamp), and — with
+`--diversity` — **scaffold & fingerprint diversity, effective # of chemical clusters, and per-fold
+train→test nearest-neighbour novelty**.
+
+- **Only list what you ran.** Ran just the scaffold splits? Drop `mydata_chrono mydata_sliding`. Just time?
+  Drop `--protocols v1_preshuffle v2_astartes` (or use the `--name mydata` shortcut, which expands to the
+  two time datasets @ `custom`). Either way the command never errors on a split you didn't run.
+- **Default-only is fine now** (`--phases default`). When your tuned runs finish, re-run with
+  `--phases default hp_final` and re-send — it's idempotent, so it just overwrites.
+- **Send back only `mydata_share.json`.** It's KBs–low-MBs (scalars only), so email or a small git commit
+  both work.
