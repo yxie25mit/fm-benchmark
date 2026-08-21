@@ -258,7 +258,14 @@ python collect_results.py --dataset mydata --protocol v1_preshuffle --phase hp_f
 python collect_results.py --dataset mydata --protocol v2_astartes  --phase hp_final \
   --methods chemeleon chemprop2 molclr --out mydata_v2_hpfinal.csv
 ```
-- `molformer` must use `--jobs-per-gpu 1`; the others tolerate 2–4.
+- **`--jobs-per-gpu`**: pass **`auto`** (recommended) to size it to your GPU — it measures one job's
+  peak memory and fits as many as the card holds (adapts to 48/80 GB, safety 0.85). If a run still
+  OOMs, it steps concurrency **down to the largest width that still fits** — by 1 first (so memory
+  stays near-maxed, not halved away), then halving only if it's badly off — all the way to serial;
+  a job that OOMs even at serial exceeds the GPU (reduce batch / set `MOLFORMER_TOKEN_BUDGET`). Or set
+  it by hand: `molformer` needs `1`, the others tolerate 2–4. (molformer can also use
+  `MOLFORMER_TOKEN_BUDGET=auto` to length-bucket long SMILES within the GPU's memory — short molecules
+  keep big fast batches, only long ones get small batches — instead of shrinking every batch.)
 - Same flags as the adapter above: multitask (several `--target-cols`), `--metric`, and
   `--learning-curve-sizes` / `--lc-repeats` (subsets are generated per style; then
   `run_learning_curve.py --protocols v1_preshuffle v2_astartes --fractions <sizes>`).
@@ -323,7 +330,14 @@ python export_time_split.py --name mydata --methods chemprop2 molclr --phases de
   dataset sizes + diversity/novelty) as aggregate numbers; no molecule-level data is included. Drop
   `--diversity` if you don't want the chemistry-coverage metrics (they need `rdkit`, already in the
   orchestrator env).
-- `molformer` must use `--jobs-per-gpu 1`; the others tolerate 2–4.
+- **`--jobs-per-gpu`**: pass **`auto`** (recommended) to size it to your GPU — it measures one job's
+  peak memory and fits as many as the card holds (adapts to 48/80 GB, safety 0.85). If a run still
+  OOMs, it steps concurrency **down to the largest width that still fits** — by 1 first (so memory
+  stays near-maxed, not halved away), then halving only if it's badly off — all the way to serial;
+  a job that OOMs even at serial exceeds the GPU (reduce batch / set `MOLFORMER_TOKEN_BUDGET`). Or set
+  it by hand: `molformer` needs `1`, the others tolerate 2–4. (molformer can also use
+  `MOLFORMER_TOKEN_BUDGET=auto` to length-bucket long SMILES within the GPU's memory — short molecules
+  keep big fast batches, only long ones get small batches — instead of shrinking every batch.)
 - **Same data flags as the other modes** (all valid with `--time-split`): `--task cls|reg` (required),
   `--target-cols` (one column, or several for a multitask model), `--metric` (optional; else ROC-AUC for
   cls / RMSE for reg — case-insensitive, e.g. `roc_auc`/`pr_auc`/`rmse`/`mae`/`spearman`/`pearson`),

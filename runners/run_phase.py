@@ -190,15 +190,21 @@ def run_job(job: Job, gpu_queue: Queue):
         return ("fail", job, 0.0)
 
 
-def run_jobs_with_retry(jobs, gpus, jobs_per_gpu, max_oom_retries=2):
+def run_jobs_with_retry(jobs, gpus, jobs_per_gpu, max_oom_retries=None):
+    """On OOM, step concurrency DOWN to settle at the highest jobs-per-gpu that still fits — so
+    memory stays near-maxed rather than being halved away. First 3 retries decrement by 1
+    (fine-grained: reclaims most of the card, ideal after an `auto` near-miss); if it's still
+    OOMing after that (a badly-off estimate), it halves to collapse fast — all the way to serial
+    (1 job/gpu). If a job still OOMs at serial, that single job exceeds the GPU (reduce batch /
+    set MOLFORMER_TOKEN_BUDGET). max_oom_retries kept for API compat; the step-down self-terminates."""
     results = {"ok": [], "oom": [], "fail": [], "timeout": [], "done": []}
     pending = list(jobs)
-    workers = len(gpus) * jobs_per_gpu
-    retries = 0
-    while pending and retries <= max_oom_retries:
-        # Slot pool: `workers` slots spread round-robin across GPUs so each GPU holds
-        # at most ceil(workers/len(gpus)) concurrent jobs (== jobs_per_gpu at full
-        # width, fewer after a halving retry). Rebuilt each retry to match `workers`.
+    jpg = jobs_per_gpu
+    step = 0
+    while pending:
+        workers = len(gpus) * jpg
+        # Slot pool: `workers` slots round-robin across GPUs so each GPU holds at most `jpg`
+        # concurrent jobs. Rebuilt each round to match the current width.
         gpu_queue = Queue()
         for i in range(workers):
             gpu_queue.put(gpus[i % len(gpus)])
@@ -209,8 +215,6 @@ def run_jobs_with_retry(jobs, gpus, jobs_per_gpu, max_oom_retries=2):
                 try:
                     status, job, elapsed = f.result()
                 except Exception as e:
-                    # Belt-and-suspenders: if a worker still raises (shouldn't with try/except above),
-                    # log it and continue rather than crashing the pool.
                     print(f"  [future-error] {type(e).__name__}: {e}")
                     continue
                 cur_results.append((status, job, elapsed))
@@ -220,13 +224,62 @@ def run_jobs_with_retry(jobs, gpus, jobs_per_gpu, max_oom_retries=2):
         if not oom_jobs:
             break
         pending = oom_jobs
-        workers = max(1, workers // 2)
-        retries += 1
-        print(f"  [retry {retries}] {len(oom_jobs)} OOMs, halving workers to {workers}")
+        if jpg <= 1:   # already serial and STILL OOM -> a single job exceeds GPU memory
+            print(f"  [oom] {len(oom_jobs)} job(s) still OOM at 1 job/gpu (serial): a single job "
+                  f"exceeds GPU memory — reduce batch / set MOLFORMER_TOKEN_BUDGET; can't reduce further.")
+            break
+        step += 1
+        jpg = (jpg - 1) if step <= 3 else max(1, jpg // 2)   # gentle first (max memory), then halve
+        print(f"  [retry {step}] {len(oom_jobs)} OOM(s), reducing to {jpg} job(s)/gpu"
+              f"{' (serial)' if jpg == 1 else ''}")
     return results
 
 
 # ---------------------------------------------------------------------------
+def calibrate_jobs_per_gpu(job, gpu, cap=8, safety=0.85):
+    """Run ONE job on `gpu`, poll its peak GPU memory (nvidia-smi), and size the pool:
+    jobs_per_gpu = clamp(floor(total*safety / peak_per_job), 1, cap). The job produces its
+    normal outputs (+ done.flag), so it counts as real work, not a wasted probe. OOM-halving
+    in run_jobs_with_retry remains the backstop if concurrency still overshoots (e.g. a later,
+    longer-sequence dataset needs more per job than the calibration one)."""
+    import threading
+
+    def q(field):
+        try:
+            r = subprocess.run(["nvidia-smi", f"--query-gpu={field}", "--format=csv,noheader,nounits",
+                                "-i", str(gpu)], capture_output=True, text=True, timeout=10)
+            return int(r.stdout.strip().split("\n")[0])
+        except Exception:
+            return None
+
+    total = q("memory.total")
+    base = q("memory.used") or 0
+    peak = [base]
+    stop = threading.Event()
+
+    def poll():
+        while not stop.is_set():
+            m = q("memory.used")
+            if m is not None:
+                peak[0] = max(peak[0], m)
+            time.sleep(0.4)
+
+    watcher = threading.Thread(target=poll, daemon=True)
+    watcher.start()
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+    job.gpu = gpu
+    job.out_dir.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    subprocess.run(job.cmd(), env=env, capture_output=True, text=True)
+    stop.set(); watcher.join(timeout=2)
+    per_job = max(peak[0] - base, 300)
+    jobs = max(1, min(cap, int((total * safety) // per_job))) if total else 1
+    print(f"[auto jobs-per-gpu] measured peak/job ~{per_job} MiB (base {base}, GPU total {total} MiB) "
+          f"in {time.time() - t0:.0f}s -> jobs-per-gpu = {jobs}", flush=True)
+    return jobs
+
+
 def _agg_per_target(per_seed_target):
     """per_seed_target: per-fold list of per-target score lists (aligned by target index, None ok).
     Returns a per-target list of {mean,std,n} across folds. None if nothing multitask to report."""
@@ -434,8 +487,9 @@ def main():
                    help="Override default epochs (default 100, hp_search 30).")
     p.add_argument("--gpus", type=str, default="0",
                    help="Comma-separated GPU ids, e.g., '0,1,2,3'.")
-    p.add_argument("--jobs-per-gpu", type=int, default=1,
-                   help="Jobs per GPU (cross-cell parallelism). max_workers = len(gpus)*jobs_per_gpu.")
+    p.add_argument("--jobs-per-gpu", default="1",
+                   help="Jobs per GPU, or 'auto' to measure one job's peak GPU memory and fit as many "
+                        "as the card holds (safety 0.85, OOM-halving backstop). Adapts to 48/80 GB cards.")
     p.add_argument("--max-configs", type=int, default=None,
                    help="(hp_search only) cap number of HP configs (smoke testing).")
     p.add_argument("--hp-per-fold", action="store_true",
@@ -445,7 +499,6 @@ def main():
     args = p.parse_args()
 
     gpus = [int(g) for g in args.gpus.split(",")]
-    max_workers = len(gpus) * args.jobs_per_gpu
     epochs = args.epochs or (30 if args.phase == "hp_search" else 100)
 
     # Build the global job list across all (dataset, protocol) cells.
@@ -477,13 +530,21 @@ def main():
                                                     rec["hp"], rec["id"])
             all_jobs.extend(cell_jobs)
 
+    # Resolve jobs-per-gpu: 'auto' measures one job's GPU memory and fits as many as the card holds.
+    if str(args.jobs_per_gpu) == "auto":
+        todo = [j for j in all_jobs if not (j.out_dir / "done.flag").exists()]
+        jobs_per_gpu = calibrate_jobs_per_gpu(todo[0], gpus[0]) if todo else 1
+    else:
+        jobs_per_gpu = int(args.jobs_per_gpu)
+    max_workers = len(gpus) * jobs_per_gpu
+
     # GPU is assigned dynamically at run time from a slot pool (see run_job /
     # run_jobs_with_retry), so no static per-job pinning here.
     print(f"=== run_phase scheduling {len(all_jobs)} jobs across {len(args.datasets)} datasets, "
           f"{len(args.protocols)} protocols ({args.method}/{args.phase}) ===")
-    print(f"max_workers = {len(gpus)} GPUs × {args.jobs_per_gpu} jobs/gpu = {max_workers}")
+    print(f"max_workers = {len(gpus)} GPUs × {jobs_per_gpu} jobs/gpu = {max_workers}")
 
-    run_jobs_with_retry(all_jobs, gpus, args.jobs_per_gpu)
+    run_jobs_with_retry(all_jobs, gpus, jobs_per_gpu)
 
     # Aggregate per cell after global pool finishes.
     print("\n=== per-cell summaries ===")

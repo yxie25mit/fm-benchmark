@@ -73,8 +73,8 @@ def main():
                    help="Select HPs per fold on each fold's own validation (not mean across folds). "
                         "Auto-on for --time-split sliding datasets; prevents temporal HP leakage.")
     p.add_argument("--gpus", default="0", help="comma-separated, e.g. '0,1,2,3'")
-    p.add_argument("--jobs-per-gpu", type=int, default=2,
-                   help="Concurrent jobs per GPU. Total workers = len(gpus) × jobs_per_gpu.")
+    p.add_argument("--jobs-per-gpu", default="2",
+                   help="Concurrent jobs per GPU, or 'auto' to fit by measured GPU memory (adapts to 48/80 GB).")
     p.add_argument("--epochs-default", type=int, default=None)
     p.add_argument("--epochs-hp-search", type=int, default=None)
     p.add_argument("--epochs-hp-final", type=int, default=None)
