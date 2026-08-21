@@ -311,7 +311,18 @@ python -m orchestrator.run_benchmark --methods chemprop2 molclr \
 # 3) COMBINED TABLE (chrono headline + sliding mean±std). Match --phase to the run:
 python collect_time_split.py --name mydata --phase default  --methods chemprop2 molclr   # after 2a
 python collect_time_split.py --name mydata --phase hp_final --methods chemprop2 molclr   # after 2b
+
+# 4) PACKAGE ONE shareable JSON to send back (scalars only — NO predictions / labels / SMILES).
+#    Bundles: per-fold + ensembled metrics (per-target for multitask), chosen HPs, per-fold sizes &
+#    class balance, ensemble completeness, provenance, AND (--diversity) dataset diversity +
+#    per-fold train->test nearest-neighbour novelty. This one file is all you send back.
+python export_time_split.py --name mydata --methods chemprop2 molclr --phases default hp_final \
+  --diversity --out mydata_share.json
 ```
+- **What to send back:** just `mydata_share.json` from step 4 — it contains everything (results +
+  dataset sizes + diversity/novelty) as aggregate numbers; no molecule-level data is included. Drop
+  `--diversity` if you don't want the chemistry-coverage metrics (they need `rdkit`, already in the
+  orchestrator env).
 - `molformer` must use `--jobs-per-gpu 1`; the others tolerate 2–4.
 - **Same data flags as the other modes** (all valid with `--time-split`): `--task cls|reg` (required),
   `--target-cols` (one column, or several for a multitask model), `--metric` (optional; else ROC-AUC for
