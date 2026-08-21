@@ -227,6 +227,20 @@ def run_jobs_with_retry(jobs, gpus, jobs_per_gpu, max_oom_retries=2):
 
 
 # ---------------------------------------------------------------------------
+def _agg_per_target(per_seed_target):
+    """per_seed_target: per-fold list of per-target score lists (aligned by target index, None ok).
+    Returns a per-target list of {mean,std,n} across folds. None if nothing multitask to report."""
+    lists = [p for p in per_seed_target if p]
+    if not lists:
+        return None
+    n_t = max(len(p) for p in lists)
+    out = []
+    for t in range(n_t):
+        vals = [p[t] for p in lists if t < len(p) and p[t] is not None]
+        out.append(cross_seed_summary(vals))
+    return out
+
+
 def aggregate_phase(method, dataset, protocol, phase_dir, hp_id):
     """Ensemble-average preds per seed, compute metric, summarize across seeds.
 
@@ -241,15 +255,20 @@ def aggregate_phase(method, dataset, protocol, phase_dir, hp_id):
     prescribed_metric = meta["metric"] if meta.get("source") == "tdc" else None
     seeds = _eval_seeds(dataset, protocol)
     base = phase_dir if hp_id == "default" else phase_dir / hp_id
-    per_seed_am, per_seed_gm = [], []
+    per_seed_am, per_seed_gm, per_seed_target = [], [], []
     for s in seeds:
         seed_dirs = sorted(base.glob(f"seed{s}_em*"))
-        am, gm, _ = ensemble_metric_for_seed(seed_dirs, task_type, qm, metric=prescribed_metric)
-        per_seed_am.append(am); per_seed_gm.append(gm)
-    return {
+        am, gm, per = ensemble_metric_for_seed(seed_dirs, task_type, qm, metric=prescribed_metric)
+        per_seed_am.append(am); per_seed_gm.append(gm); per_seed_target.append(per)
+    summary = {
         "per_seed_am": per_seed_am, "agg_am": cross_seed_summary(per_seed_am),
         "per_seed_gm": per_seed_gm, "agg_gm": cross_seed_summary(per_seed_gm),
     }
+    if meta.get("n_targets", 1) > 1:   # ensembled per-target (multitask only)
+        summary["per_seed_per_target"] = per_seed_target
+        summary["agg_per_target"] = _agg_per_target(per_seed_target)
+        summary["target_columns"] = meta.get("target_columns")
+    return summary
 
 
 def pick_best_hp(phase_dir, dataset):
@@ -380,19 +399,24 @@ def aggregate_phase_per_fold(method, dataset, protocol, phase_dir, folds):
     meta = json.loads((PIPELINE / "cleaned" / f"{dataset}.meta.json").read_text())
     task_type, qm = meta["task_type"], dataset in ("qm7", "qm8", "qm9")
     prescribed_metric = meta["metric"] if meta.get("source") == "tdc" else None
-    per_seed_am, per_seed_gm, used = [], [], {}
+    per_seed_am, per_seed_gm, per_seed_target, used = [], [], [], {}
     for s in _eval_seeds(dataset, protocol):
         w = folds.get(str(s))
         if w is None:
             continue
         seed_dirs = sorted((phase_dir / w["id"]).glob(f"seed{s}_em*"))
-        am, gm, _ = ensemble_metric_for_seed(seed_dirs, task_type, qm, metric=prescribed_metric)
-        per_seed_am.append(am); per_seed_gm.append(gm); used[str(s)] = w["id"]
-    return {
+        am, gm, per = ensemble_metric_for_seed(seed_dirs, task_type, qm, metric=prescribed_metric)
+        per_seed_am.append(am); per_seed_gm.append(gm); per_seed_target.append(per); used[str(s)] = w["id"]
+    summary = {
         "per_seed_am": per_seed_am, "agg_am": cross_seed_summary(per_seed_am),
         "per_seed_gm": per_seed_gm, "agg_gm": cross_seed_summary(per_seed_gm),
         "per_fold_hp": used,
     }
+    if meta.get("n_targets", 1) > 1:
+        summary["per_seed_per_target"] = per_seed_target
+        summary["agg_per_target"] = _agg_per_target(per_seed_target)
+        summary["target_columns"] = meta.get("target_columns")
+    return summary
 
 
 # ---------------------------------------------------------------------------

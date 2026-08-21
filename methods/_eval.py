@@ -72,9 +72,9 @@ def ensemble_metric_for_seed(seed_dirs, task_type, qm_dataset, metric=None):
         return None, None, None
     pred_avg = np.mean(np.stack(pred_list, axis=0), axis=0)
     if metric is not None:
-        from _tdc_metrics import score as _tdc_score
+        from _tdc_metrics import score as _tdc_score, score_per_target as _tdc_per
         val = _tdc_score(pred_avg, labels, metric)
-        return val, val, [val]
+        return val, val, _tdc_per(pred_avg, labels, metric)
     per = per_target_metric(pred_avg, labels, task_type, qm_dataset)
     am, gm = aggregate_am_gm(per)
     return am, gm, per

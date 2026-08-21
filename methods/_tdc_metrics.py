@@ -57,10 +57,9 @@ def _score_one(y, p, m):
     raise ValueError(f"unknown metric {m!r}")
 
 
-def score(pred, labels, metric):
-    """NaN-aware, multi-target-aware scalar score. pred/labels shape (N,) or (N,T).
-    Per target: drop NaN labels; for cls metrics also skip single-class targets.
-    Returns the macro-mean over scorable targets (== the single value for T=1)."""
+def score_per_target(pred, labels, metric):
+    """Per-target scores aligned to labels' columns; None where a target is unscorable
+    (all-NaN, or single-class for cls). NaN-aware. pred/labels shape (N,) or (N,T)."""
     m = _norm(metric)
     pred = np.asarray(pred, dtype=float)
     labels = np.asarray(labels, dtype=float)
@@ -69,15 +68,21 @@ def score(pred, labels, metric):
     if labels.ndim == 1:
         labels = labels[:, None]
     is_cls = m in ("roc_auc", "auc", "pr_auc", "auprc", "average_precision")
-    vals = []
+    out = []
     for t in range(labels.shape[1]):
         y = labels[:, t]
         p = pred[:, t]
         ok = ~np.isnan(y) & ~np.isnan(p)
         y, p = y[ok], p[ok]
-        if len(y) == 0:
+        if len(y) == 0 or (is_cls and len(np.unique(y)) < 2):
+            out.append(None)
             continue
-        if is_cls and len(np.unique(y)) < 2:
-            continue
-        vals.append(_score_one(y, p, m))
+        out.append(_score_one(y, p, m))
+    return out
+
+
+def score(pred, labels, metric):
+    """NaN-aware, multi-target-aware scalar score. Returns the macro-mean over scorable
+    targets (== the single value for T=1)."""
+    vals = [v for v in score_per_target(pred, labels, metric) if v is not None]
     return float(np.mean(vals)) if vals else float("nan")
