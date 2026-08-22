@@ -207,6 +207,12 @@ you read its numbers:
 - **Per-target standardization.** For multitask regression each target column is standardized (train
   mean/std) before training and predictions are de-standardized for the reported MAE — necessary
   because properties can be on very different scales.
+- **Token-budget batching (our addition) — long-SMILES OOM safety, on by default.** The default
+  collate pads every batch to the longest SMILES in it, so one long molecule in a fixed-size batch can
+  blow up peak memory and OOM the GPU. molformer here groups molecules by token length and caps each
+  batch at a token budget (`MOLFORMER_TOKEN_BUDGET=auto`, scaled to the GPU): short SMILES pack into
+  big, fast batches; long ones fall into small, memory-safe batches. Near-identical to fixed batching
+  for short-SMILES datasets; set `MOLFORMER_TOKEN_BUDGET=0` to disable, or a fixed integer to pin the cap.
 - **Same as upstream:** single-target classification/regression, and the multitask-classification
   model structure.
 
@@ -262,10 +268,11 @@ python collect_results.py --dataset mydata --protocol v2_astartes  --phase hp_fi
   peak memory and fits as many as the card holds (adapts to 48/80 GB, safety 0.85). If a run still
   OOMs, it steps concurrency **down to the largest width that still fits** — by 1 first (so memory
   stays near-maxed, not halved away), then halving only if it's badly off — all the way to serial;
-  a job that OOMs even at serial exceeds the GPU (reduce batch / set `MOLFORMER_TOKEN_BUDGET`). Or set
-  it by hand: `molformer` needs `1`, the others tolerate 2–4. (molformer can also use
-  `MOLFORMER_TOKEN_BUDGET=auto` to length-bucket long SMILES within the GPU's memory — short molecules
-  keep big fast batches, only long ones get small batches — instead of shrinking every batch.)
+  a job that OOMs even at serial exceeds the GPU (reduce batch size). Or set it by hand: `molformer`
+  tolerates `1`, the others 2–4. **molformer's long-SMILES OOM is handled automatically:** it batches
+  by token budget by default (`MOLFORMER_TOKEN_BUDGET=auto`) — short SMILES pack into big, fast batches
+  while long ones drop into small, memory-safe ones, so a single long molecule can't blow up peak
+  memory. Set `MOLFORMER_TOKEN_BUDGET=0` to disable, or a fixed integer to set the per-batch token cap.
 - Same flags as the adapter above: multitask (several `--target-cols`), `--metric`, and
   `--learning-curve-sizes` / `--lc-repeats` (subsets are generated per style; then
   `run_learning_curve.py --protocols v1_preshuffle v2_astartes --fractions <sizes>`).
@@ -308,38 +315,53 @@ python prepare_user_data.py --name mydata --csv mydata.csv \
 # 2a) DEFAULT HPs (fast; no tuning, so the per-fold-HP question doesn't arise)
 python -m orchestrator.run_benchmark --methods chemprop2 molclr \
   --datasets mydata_chrono mydata_sliding --protocols custom --phases default \
-  --gpus 0,1,2,3 --jobs-per-gpu 1
+  --gpus 0,1,2,3 --jobs-per-gpu auto
 
 # 2b) TUNED HPs (chrono tuned on its own val; sliding tuned PER FOLD on each fold's own val, automatic)
 python -m orchestrator.run_benchmark --methods chemprop2 molclr \
   --datasets mydata_chrono mydata_sliding --protocols custom --phases hp_search hp_final \
-  --gpus 0,1,2,3 --jobs-per-gpu 1
+  --gpus 0,1,2,3 --jobs-per-gpu auto
 
 # 3) COMBINED TABLE (chrono headline + sliding mean±std). Match --phase to the run:
 python collect_time_split.py --name mydata --phase default  --methods chemprop2 molclr   # after 2a
 python collect_time_split.py --name mydata --phase hp_final --methods chemprop2 molclr   # after 2b
 
 # 4) PACKAGE ONE shareable JSON to send back (scalars only — NO predictions / labels / SMILES).
-#    Bundles: per-fold + ensembled metrics (per-target for multitask), chosen HPs, per-fold sizes &
-#    class balance, ensemble completeness, provenance, AND (--diversity) dataset diversity +
-#    per-fold train->test nearest-neighbour novelty. This one file is all you send back.
-python export_time_split.py --name mydata --methods chemprop2 molclr --phases default hp_final \
-  --diversity --out mydata_share.json
+#    Bundles per-fold + per-seed/ensemble metrics (per-target for multitask), chosen HPs, per-fold
+#    sizes & class balance, ensemble completeness, provenance, AND (--diversity) dataset diversity +
+#    per-fold train->test nearest-neighbour novelty. One file is all you send back. Pick the command
+#    matching what you ran (match --phases too: add hp_final only after you ran the tuned phase):
+#
+#    A) time splits ONLY (mydata_chrono + mydata_sliding):
+python export_time_split.py --name mydata --methods chemprop2 molclr \
+  --phases default --diversity --out mydata_share.json
+#
+#    B) if you ALSO ran the scaffold splits — ONE file covering time + scaffold together. List every
+#       dataset the adapter produced and every protocol you ran; any combo you didn't run is skipped:
+python export_time_split.py \
+  --datasets mydata mydata_chrono mydata_sliding \
+  --protocols custom v1_preshuffle v2_astartes \
+  --methods chemprop2 molclr --phases default --diversity --out mydata_share.json
 ```
 - **What to send back:** just `mydata_share.json` from step 4 — it contains everything (results +
   dataset sizes + diversity/novelty) as aggregate numbers; no molecule-level data is included. Drop
   `--diversity` if you don't want the chemistry-coverage metrics (they need `rdkit`, already in the
   orchestrator env).
-- **Ran scaffold splits too?** One export can aggregate **both scaffold and time splits into a single
-  JSON** — see [Package everything to send back](#package-everything-to-send-back--one-json-aggregates-over-all-your-splits).
+- **Command B aggregates both split families into one file:** scaffold `mydata@v1_preshuffle` &
+  `mydata@v2_astartes` (from [scaffold splits](#reproducing-our-scaffold-splits-on-your-own-data)) plus
+  time `mydata_chrono@custom` & `mydata_sliding@custom`. For each cell it stores per-seed × per-ensemble
+  val/test metrics, per-fold ensembled score + mean/std (per-target for multitask), chosen HPs (per-fold
+  for sliding), per-fold sizes & class balance, completeness, provenance, and (with `--diversity`)
+  scaffold/fingerprint diversity + per-fold train→test novelty.
 - **`--jobs-per-gpu`**: pass **`auto`** (recommended) to size it to your GPU — it measures one job's
   peak memory and fits as many as the card holds (adapts to 48/80 GB, safety 0.85). If a run still
   OOMs, it steps concurrency **down to the largest width that still fits** — by 1 first (so memory
   stays near-maxed, not halved away), then halving only if it's badly off — all the way to serial;
-  a job that OOMs even at serial exceeds the GPU (reduce batch / set `MOLFORMER_TOKEN_BUDGET`). Or set
-  it by hand: `molformer` needs `1`, the others tolerate 2–4. (molformer can also use
-  `MOLFORMER_TOKEN_BUDGET=auto` to length-bucket long SMILES within the GPU's memory — short molecules
-  keep big fast batches, only long ones get small batches — instead of shrinking every batch.)
+  a job that OOMs even at serial exceeds the GPU (reduce batch size). Or set it by hand: `molformer`
+  tolerates `1`, the others 2–4. **molformer's long-SMILES OOM is handled automatically:** it batches
+  by token budget by default (`MOLFORMER_TOKEN_BUDGET=auto`) — short SMILES pack into big, fast batches
+  while long ones drop into small, memory-safe ones, so a single long molecule can't blow up peak
+  memory. Set `MOLFORMER_TOKEN_BUDGET=0` to disable, or a fixed integer to set the per-batch token cap.
 - **Same data flags as the other modes** (all valid with `--time-split`): `--task cls|reg` (required),
   `--target-cols` (one column, or several for a multitask model), `--metric` (optional; else ROC-AUC for
   cls / RMSE for reg — case-insensitive, e.g. `roc_auc`/`pr_auc`/`rmse`/`mae`/`spearman`/`pearson`),
@@ -387,53 +409,3 @@ python collect_results.py --dataset mydata_sliding --protocol custom --learning-
   ~67% by default). To anchor the curve at the full window, include a size ≥ that (it caps to 100%).
 - Run it on **`mydata_sliding`** (not `_chrono`): the curve's error bars come from the 3 folds. `molformer`
   needs `--jobs-per-gpu 1` here too.
-
----
-
-## Package everything to send back — ONE JSON (aggregates over all your splits)
-`export_time_split.py` bundles a whole benchmark run into **one scalar-only JSON** — the single file you
-send back (no predictions, labels, or SMILES ever leave your side). **One file aggregates over every split
-you ran.** Pick the command that matches what you did:
-
-**A) You ran only the time splits** (`mydata_chrono` + `mydata_sliding`):
-```bash
-python export_time_split.py --name mydata \
-  --methods chemeleon chemprop2 molclr molformer --phases default \
-  --diversity --out mydata_share.json
-```
-
-**B) You ran the scaffold splits too** — this one file covers **time + scaffold together**:
-```bash
-python export_time_split.py \
-  --datasets mydata mydata_chrono mydata_sliding \
-  --protocols custom v1_preshuffle v2_astartes \
-  --methods chemeleon chemprop2 molclr molformer --phases default \
-  --diversity --out mydata_share.json
-```
-Command **B** lists every dataset the adapter produced and every protocol you ran; **any
-`(dataset × protocol)` combo you didn't run is skipped automatically**, so it's always safe to list them
-all. (Command **A** is just the shorthand for the two time datasets @ `custom`.)
-
-What lands in `mydata_share.json` — aggregated over all the splits you ran (all four, for command **B**):
-
-| split | in the JSON as | comes from |
-| --- | --- | --- |
-| scaffold `v1_preshuffle` | `mydata@v1_preshuffle` | `## Reproducing our scaffold splits` |
-| scaffold `v2_astartes` | `mydata@v2_astartes` | `## Reproducing our scaffold splits` |
-| time chronological | `mydata_chrono@custom` | `## Time splits (chronological)` |
-| time sliding window | `mydata_sliding@custom` | `## Time splits (chronological)` |
-
-For each of those cells the file stores: **per-seed × per-ensemble-member** val *and* test metrics, the
-**per-fold ensembled** score + mean/std (per-target too, for multitask), the **chosen HPs** (per-fold for
-the sliding windows), per-fold **train/val/test sizes** and **class balance**, ensemble **completeness**
-(found vs expected — flags any partial/crashed cell), **provenance** (git commit + timestamp), and — with
-`--diversity` — **scaffold & fingerprint diversity, effective # of chemical clusters, and per-fold
-train→test nearest-neighbour novelty**.
-
-- **Only list what you ran.** Ran just the scaffold splits? Drop `mydata_chrono mydata_sliding`. Just time?
-  Drop `--protocols v1_preshuffle v2_astartes` (or use the `--name mydata` shortcut, which expands to the
-  two time datasets @ `custom`). Either way the command never errors on a split you didn't run.
-- **Default-only is fine now** (`--phases default`). When your tuned runs finish, re-run with
-  `--phases default hp_final` and re-send — it's idempotent, so it just overwrites.
-- **Send back only `mydata_share.json`.** It's KBs–low-MBs (scalars only), so email or a small git commit
-  both work.

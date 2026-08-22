@@ -334,6 +334,10 @@ def main():
     # The multitask script names its per-epoch results CSV with os.environ["LSB_JOBID"]
     # (an LSF cluster var). Off-cluster that KeyErrors; set a per-process unique id.
     os.environ.setdefault("LSB_JOBID", str(os.getpid()))
+    # Token-budget batching: length-groups batches so one long SMILES can't blow up peak memory
+    # (fixes the pad-to-longest OOM). 'auto' scales the budget to the GPU; near-identical to fixed
+    # batching for short SMILES, memory-safe for long ones. Override MOLFORMER_TOKEN_BUDGET=0 to disable.
+    os.environ.setdefault("MOLFORMER_TOKEN_BUDGET", "auto")
 
     mod = importlib.import_module(script_name)
     # single-task scripts name the class LightningModule; the multitask script
