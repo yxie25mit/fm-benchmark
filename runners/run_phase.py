@@ -236,13 +236,15 @@ def run_jobs_with_retry(jobs, gpus, jobs_per_gpu, max_oom_retries=None):
 
 
 # ---------------------------------------------------------------------------
-def calibrate_jobs_per_gpu(job, gpu, cap=8, safety=0.85):
-    """Run ONE job on `gpu`, poll its peak GPU memory (nvidia-smi), and size the pool:
-    jobs_per_gpu = clamp(floor(total*safety / peak_per_job), 1, cap). The job produces its
-    normal outputs (+ done.flag), so it counts as real work, not a wasted probe. OOM-halving
-    in run_jobs_with_retry remains the backstop if concurrency still overshoots (e.g. a later,
-    longer-sequence dataset needs more per job than the calibration one)."""
-    import threading
+def calibrate_jobs_per_gpu(job, gpu, cap=8, safety=0.85, stable_seconds=90, probe_max=300):
+    """Launch ONE job on `gpu` and poll its GPU memory; as soon as the peak STABILIZES (no new max
+    for `stable_seconds` after training actually starts) or `probe_max` elapses, KILL the probe and
+    size the pool: jobs_per_gpu = clamp(floor(total*safety / peak_per_job), 1, cap).
+
+    This measures peak in ~1-3 min instead of running the (possibly hours-long) job to completion —
+    so it's fast even on huge datasets. The probe leaves no done.flag, so it simply re-runs in the
+    pool. The OOM step-down in run_jobs_with_retry is the backstop if the early peak under-estimates."""
+    import signal
 
     def q(field):
         try:
@@ -254,29 +256,42 @@ def calibrate_jobs_per_gpu(job, gpu, cap=8, safety=0.85):
 
     total = q("memory.total")
     base = q("memory.used") or 0
-    peak = [base]
-    stop = threading.Event()
-
-    def poll():
-        while not stop.is_set():
-            m = q("memory.used")
-            if m is not None:
-                peak[0] = max(peak[0], m)
-            time.sleep(0.4)
-
-    watcher = threading.Thread(target=poll, daemon=True)
-    watcher.start()
+    peak = base
+    last_new = time.time()
+    started = False
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu)
     job.gpu = gpu
     job.out_dir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
-    subprocess.run(job.cmd(), env=env, capture_output=True, text=True)
-    stop.set(); watcher.join(timeout=2)
-    per_job = max(peak[0] - base, 300)
+    proc = subprocess.Popen(job.cmd(), env=env, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        while proc.poll() is None:
+            m = q("memory.used")
+            if m is not None and m > peak:
+                peak = m
+                last_new = time.time()
+            if not started and peak > base + 500:   # GPU memory rose -> training actually started
+                started = True
+            now = time.time()
+            if (started and now - last_new > stable_seconds) or (now - t0 > probe_max):
+                break
+            time.sleep(1.0)
+    finally:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            proc.wait(timeout=10)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+    per_job = max(peak - base, 300)
     jobs = max(1, min(cap, int((total * safety) // per_job))) if total else 1
-    print(f"[auto jobs-per-gpu] measured peak/job ~{per_job} MiB (base {base}, GPU total {total} MiB) "
-          f"in {time.time() - t0:.0f}s -> jobs-per-gpu = {jobs}", flush=True)
+    why = "peak stabilized" if started else "probe timeout"
+    print(f"[auto jobs-per-gpu] {why}: peak/job ~{per_job} MiB (base {base}, GPU total {total} MiB) "
+          f"in {time.time() - t0:.0f}s -> jobs-per-gpu = {jobs} (probe killed; re-runs in the pool)", flush=True)
     return jobs
 
 

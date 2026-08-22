@@ -383,6 +383,33 @@ def main():
 
     lm_class.validation_epoch_end = patched_val_epoch_end
 
+    # Granular per-batch heartbeat (throttled ~30s): ties liveness to real training progress, so a
+    # monitor sees molformer moving within seconds AND a mid-epoch wedge stops the beat — unlike the
+    # per-epoch beat above, which on big datasets (qm9) updates only every 10-30 min.
+    orig_on_batch = getattr(lm_class, "on_train_batch_end", None)
+    _hb_last = {"t": 0.0}
+
+    def patched_on_train_batch_end(self, *a, **k):
+        if orig_on_batch is not None:
+            try:
+                orig_on_batch(self, *a, **k)
+            except Exception:
+                pass
+        now = time.time()
+        if now - _hb_last["t"] >= 30:
+            _hb_last["t"] = now
+            try:
+                tmp = out / "heartbeat.json.tmp"
+                tmp.write_text(json.dumps({"epoch": int(getattr(self, "current_epoch", -1)),
+                                           "total_epochs": int(cli.epochs),
+                                           "step": int(getattr(self, "global_step", -1)),
+                                           "ts": int(now)}))
+                os.replace(tmp, out / "heartbeat.json")
+            except Exception:
+                pass
+
+    lm_class.on_train_batch_end = patched_on_train_batch_end
+
     saved_argv = sys.argv
     sys.argv = argv
     t0 = time.time()
