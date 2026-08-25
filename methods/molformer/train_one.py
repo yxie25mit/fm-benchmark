@@ -355,7 +355,8 @@ def main():
     orig_val_epoch_end = lm_class.validation_epoch_end
 
     captor = {"best_val_loss": float("inf"), "best_test_preds": None,
-              "best_val_preds": None, "best_epoch": -1}
+              "best_val_preds": None, "best_test_labels": None,
+              "best_val_labels": None, "best_epoch": -1}
 
     def patched_val_epoch_end(self, outputs):
         out_ = orig_val_epoch_end(self, outputs)
@@ -366,9 +367,16 @@ def main():
             if val_loss < captor["best_val_loss"] and len(outputs) > 1:
                 val_preds = torch.cat([x["pred"] for x in val_outs]).detach().cpu().numpy()
                 test_preds = torch.cat([x["pred"] for x in outputs[1]]).detach().cpu().numpy()
+                # Capture labels from the SAME batches as preds so each label travels with its own
+                # molecule. Token-budget batching reorders the eval loader (length-sorted), so reading
+                # labels from test.csv in row order would misalign them against loader-order preds.
+                val_labels = torch.cat([x["actual"] for x in val_outs]).detach().cpu().numpy()
+                test_labels = torch.cat([x["actual"] for x in outputs[1]]).detach().cpu().numpy()
                 captor["best_val_loss"] = val_loss
                 captor["best_val_preds"] = val_preds
                 captor["best_test_preds"] = test_preds
+                captor["best_val_labels"] = val_labels
+                captor["best_test_labels"] = test_labels
                 captor["best_epoch"] = int(self.current_epoch)
         except Exception as e:
             print(f"WARN: capture failed at epoch {getattr(self, 'current_epoch', '?')}: {e}")
@@ -433,8 +441,9 @@ def main():
         preds = preds.reshape(-1, 1)
     # Map raw net outputs to per-target positive-class scores aligned to target_cols.
     preds = molformer_pred_to_scores(preds.astype(np.float64), task_type, multi_name, target_cols)
-    test_csv = pd.read_csv(work_data / "test.csv")
-    targets = test_csv[target_cols].to_numpy(dtype=np.float64)
+    # Labels captured from the eval loader (aligned to preds by molecule), NOT re-read from test.csv:
+    # with token-budget batching the loader is length-sorted, so a positional CSV pairing misaligns them.
+    targets = captor["best_test_labels"].astype(np.float64)
     if targets.ndim == 1:
         targets = targets[:, None]
     # Regression targets were standardized for training; de-standardize preds AND the
@@ -462,8 +471,8 @@ def main():
         if val_preds.ndim == 1:
             val_preds = val_preds.reshape(-1, 1)
         val_preds = molformer_pred_to_scores(val_preds.astype(np.float64), task_type, multi_name, target_cols)
-        valid_csv = pd.read_csv(work_data / "valid.csv")
-        val_targets = valid_csv[target_cols].to_numpy(dtype=np.float64)
+        # Val labels from the loader too (same alignment reasoning as test above).
+        val_targets = captor["best_val_labels"].astype(np.float64)
         if val_targets.ndim == 1:
             val_targets = val_targets[:, None]
         val_preds = val_preds.astype(np.float64)
