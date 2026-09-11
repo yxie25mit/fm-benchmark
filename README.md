@@ -213,6 +213,17 @@ you read its numbers:
   batch at a token budget (`MOLFORMER_TOKEN_BUDGET=auto`, scaled to the GPU): short SMILES pack into
   big, fast batches; long ones fall into small, memory-safe batches. Near-identical to fixed batching
   for short-SMILES datasets; set `MOLFORMER_TOKEN_BUDGET=0` to disable, or a fixed integer to pin the cap.
+- **MAGMA QR warm-up (our addition) — separate small-GPU OOM.** molformer's Performer attention redraws
+  an orthogonal random-feature matrix every step, each redraw runs `torch.qr`, whose MAGMA workspace is
+  allocated *outside* torch's pool with a raw `cudaMalloc` — so it needs genuinely-free device memory,
+  which token budgeting (a torch-tensor bound) cannot provide. On small (~16 GB) GPUs the first such QR
+  could OOM (`magma_sgeqrf2_gpu`). We now run one tiny QR at startup, while the card is empty, to create
+  MAGMA's queue up front; later redraws reuse it (~48 MiB). No effect on results.
+- **Reading `peak_gpu_mem_gb` in metrics.** It is `torch.cuda.max_memory_allocated()` — live torch
+  tensors only. It EXCLUDES reserved-but-unused blocks, the CUDA context, cuBLAS/cuDNN workspaces, and
+  MAGMA's out-of-pool allocation, so the true device footprint (nvidia-smi) can be ~2x larger; the
+  companion `peak_gpu_mem_reserved_gb` reports torch's whole reserved pool. Size concurrency from
+  nvidia-smi (which `--jobs-per-gpu auto` already does), not from these fields.
 - **Same as upstream:** single-target classification/regression, and the multitask-classification
   model structure.
 

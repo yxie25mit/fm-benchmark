@@ -143,8 +143,8 @@ def materialize_data_root(dataset, protocol, seed, work_dir, dataset_name,
     MolFormer's regression head is zero-init with no internal target scaling, so on
     large-magnitude targets (e.g. qm7 atomization energy, mean ~-1545) it predicts ~0
     and never learns the offset (observed MAE ~1458). Standardizing fixes this and is
-    harmless for near-zero-mean targets. Returns {col: (mean, std)} so the caller can
-    de-standardize predictions back to original units for the reported metric.
+    harmless for near-zero-mean targets. Returns ({col: (mean, std)}, {split: idx}) so the
+    caller can de-standardize predictions and recover each test/val row's cleaned-CSV index.
     """
     src = pd.read_csv(PIPELINE / "cleaned" / f"{dataset}.csv")
     sub = "v1_det_seed0" if protocol == "v1_det" else f"{protocol}_seed{seed}"
@@ -170,7 +170,7 @@ def materialize_data_root(dataset, protocol, seed, work_dir, dataset_name,
             sub_df[c] = (sub_df[c] - mu) / sd
         sub_df.to_csv(work_dir / f"{split}.csv", index=False)
         sub_df.to_csv(work_dir / f"{dataset_name}_{split}.csv", index=False)
-    return stats
+    return stats, {"train": tr, "val": va, "test": te}
 
 
 def per_target_metric(preds, targets, task_type, qm_dataset):
@@ -198,6 +198,62 @@ def per_target_metric(preds, targets, task_type, qm_dataset):
     return per, agg_am, agg_gm
 
 
+def reindex_to_dataset_order(rows, order):
+    """Undo the eval loader's length-sort so saved rows match cleaned-CSV / test-split order.
+
+    `rows` are in eval-loader order; order[k] is the dataset index of loader row k (from the
+    token-budget sampler's emitted_order). Returns (rows_in_dataset_order, True) via out[order]=rows,
+    or (rows, False) if order is missing / wrong length / not a full permutation of 0..n-1 (in which
+    case rows are left untouched so we never silently scramble them).
+    """
+    n = rows.shape[0]
+    if order is None or len(order) != n:
+        return rows, False
+    order = np.asarray(order, dtype=np.int64)
+    if not np.array_equal(np.sort(order), np.arange(n)):
+        return rows, False
+    out = np.empty_like(rows)
+    out[order] = rows
+    return out, True
+
+
+def cleaned_csv_ids(split_idx, n, order, resorted):
+    """Global cleaned-CSV row index for each saved prediction row (so rows can be joined across
+    methods / back to cleaned/<dataset>.csv). When we resorted to dataset order, row j is split
+    position j -> split_idx[j]. If we could not resort, row k is still dataset index order[k] ->
+    split_idx[order[k]]. Falls back to local position only if the split length disagrees."""
+    split_idx = np.asarray(split_idx, dtype=np.int64)
+    if len(split_idx) != n:
+        return np.arange(n, dtype=np.int64), False
+    if resorted:
+        return split_idx.copy(), True
+    if order is not None and len(order) == n:
+        return split_idx[np.asarray(order, dtype=np.int64)], True
+    return np.arange(n, dtype=np.int64), False
+
+
+def warmup_magma_qr():
+    """Create MAGMA's QR queue while the GPU is still empty, before torch reserves its pool.
+
+    MolFormer redraws an orthogonal random-feature matrix every forward pass (fast_transformers
+    GeneralizedRandomFeatures, redraw=1), and each redraw runs torch.qr -> a MAGMA factorization
+    whose workspace is allocated with a raw cudaMalloc OUTSIDE torch's caching allocator. The first
+    such call needs ~150-250 MiB of genuinely-free device memory to create its queue; on a small
+    (16 GB) GPU torch may already have reserved almost everything by mid-epoch, so that first QR
+    OOMs (magma_sgeqrf2_gpu ... out of memory). Running one tiny QR here, while the whole card is
+    free, creates the queue up front; every later redraw reuses the warm queue (needs only ~48 MiB).
+    No effect on results. Token-budget batching can't prevent the original failure because it only
+    bounds torch tensors, not this non-torch allocation.
+    """
+    if not torch.cuda.is_available():
+        return
+    try:
+        torch.qr(torch.randn(64, 64, device="cuda"))
+        torch.cuda.synchronize()
+    except Exception as e:
+        print(f"[molformer] MAGMA QR warm-up skipped: {e}")
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--dataset", required=True)
@@ -219,6 +275,8 @@ def main():
     if (out / "done.flag").exists():
         print(f"[molformer] already done: {out}")
         return
+
+    warmup_magma_qr()
 
     # Any dataset not in the built-in table (TDC or a user's custom split): derive the
     # script from its meta.json. Single-target cls -> single-task classification, single-
@@ -288,7 +346,7 @@ def main():
     scratch_root = (Path(os.environ.get("MOLFORMER_SCRATCH", "/var/tmp"))
                     / f"molformer_{os.getpid()}").absolute()
     work_data = (scratch_root / "_data").absolute()
-    reg_stats = materialize_data_root(cli.dataset, cli.protocol, cli.seed, work_data,
+    reg_stats, splits = materialize_data_root(cli.dataset, cli.protocol, cli.seed, work_data,
                           dataset_name=(multi_name or cli.dataset),
                           target_cols=target_cols, standardize=(ds_type == "regression"))
     cp_folder = (scratch_root / "_cp").absolute()
@@ -436,6 +494,16 @@ def main():
         print("[molformer] no test predictions captured; aborting")
         return
 
+    # Row order handed out by the eval loaders. Token-budget batching length-sorts them, so preds
+    # come back in a different order than the 6 other methods (which write cleaned-CSV / test-split
+    # order). Undo that below so all methods' pred_test.npy rows line up molecule-for-molecule.
+    val_order, test_order = None, None
+    try:
+        from token_budget import get_eval_orders
+        val_order, test_order = get_eval_orders()
+    except Exception as e:
+        print(f"[molformer] WARN: could not read eval row order ({e}); predictions kept in loader order")
+
     preds = captor["best_test_preds"]
     if preds.ndim == 1:
         preds = preds.reshape(-1, 1)
@@ -458,8 +526,19 @@ def main():
     if targets.shape[0] != preds.shape[0]:
         print(f"[molformer] WARN: target rows {targets.shape[0]} != pred rows {preds.shape[0]}")
 
-    np.save(out / "pred_test.npy", preds.astype(np.float64))
+    # Undo the eval-loader length-sort so rows are in cleaned-CSV / test-split order (preds and labels
+    # get the SAME permutation, so they stay paired; the metric is row-order invariant either way).
+    preds, ok_p = reindex_to_dataset_order(preds, test_order)
+    targets, ok_t = reindex_to_dataset_order(targets, test_order)
+    resorted = ok_p and ok_t
+    ids_test, ids_ok = cleaned_csv_ids(splits["test"], preds.shape[0], test_order, resorted)
+    if not resorted:
+        print(f"[molformer] WARN: test rows left in loader order (order usable={test_order is not None}); "
+              f"ids_test {'joins to cleaned CSV' if ids_ok else 'is local position only'}")
+
+    np.save(out / "pred_test.npy", preds)
     np.save(out / "labels_test.npy", targets)
+    np.save(out / "ids_test.npy", ids_test)
 
     per, agg_am, agg_gm = per_target_metric(preds.astype(np.float64), targets, task_type, qm_dataset)
 
@@ -482,11 +561,17 @@ def main():
                 val_preds[:, t] = val_preds[:, t] * sd + mu
                 val_targets[:, t] = val_targets[:, t] * sd + mu
         if val_targets.shape[0] == val_preds.shape[0]:
+            # Same length-sort undo as test, so pred_val.npy rows also line up with the other methods.
+            val_preds, vok_p = reindex_to_dataset_order(val_preds, val_order)
+            val_targets, vok_t = reindex_to_dataset_order(val_targets, val_order)
+            v_resorted = vok_p and vok_t
+            ids_val, _ = cleaned_csv_ids(splits["val"], val_preds.shape[0], val_order, v_resorted)
             # Save val preds+labels so pick_best_hp can re-score with the prescribed
             # TDC metric (harmless for MoleculeNet, where it is unused).
             try:
                 np.save(out / "pred_val.npy", val_preds)
                 np.save(out / "labels_val.npy", val_targets)
+                np.save(out / "ids_val.npy", ids_val)
             except Exception:
                 pass
             _, val_metric, _ = per_target_metric(val_preds, val_targets, task_type, qm_dataset)
@@ -510,7 +595,12 @@ def main():
         metrics["micro_batch_size"] = step_batch_size
         metrics["accumulate_grad_batches"] = accumulate_grad_batches
     try:
+        # peak_gpu_mem_gb counts only torch's live tensors: it EXCLUDES reserved-but-unused blocks,
+        # the CUDA context, cuBLAS/cuDNN workspaces, and MAGMA's out-of-pool cudaMalloc, so the real
+        # device footprint (nvidia-smi) can be ~2x this. reserved_gb captures torch's whole pool.
+        # Size concurrency from nvidia-smi (what --jobs-per-gpu auto does), not from these fields.
         metrics["peak_gpu_mem_gb"] = round(torch.cuda.max_memory_allocated() / 2**30, 3)
+        metrics["peak_gpu_mem_reserved_gb"] = round(torch.cuda.max_memory_reserved() / 2**30, 3)
     except Exception:
         pass
     with open(out / "metrics.json", "w") as f:

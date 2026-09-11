@@ -51,6 +51,22 @@ DEFAULT_HP = {
 }
 
 
+def smiles_global_ids(common, split_idx, full, n_rows, tag):
+    """Global cleaned-CSV row index for each saved row so rows join across methods / back to
+    cleaned/<dataset>.csv. Rows follow `common` (a SMILES intersection, so this method reorders vs
+    the split); each SMILES maps to the first cleaned row with that SMILES within the split (the same
+    molecule for duplicate-SMILES datasets). Falls back to local position if lengths disagree."""
+    sm = full["smiles"].to_numpy()
+    gidx = {}
+    for i in split_idx:
+        gidx.setdefault(sm[i], int(i))
+    ids = np.array([gidx[s] for s in common if s in gidx], dtype=np.int64)
+    if len(ids) != n_rows:
+        print(f"[{tag}] WARN: id rows {len(ids)} != pred rows {n_rows}; ids = local position")
+        return np.arange(n_rows, dtype=np.int64)
+    return ids
+
+
 def build_combined_csv(dataset, protocol, seed, out_dir):
     csv = PIPELINE / "cleaned" / f"{dataset}.csv"
     df = pd.read_csv(csv)
@@ -160,8 +176,10 @@ def compute_val_metric(out, scratch_root, dataset, protocol, seed, targets, task
     # Save aligned (N,T) val preds+labels so pick_best_hp can re-score with the
     # dataset's prescribed metric (TDC). Harmless for MoleculeNet (unused there).
     try:
-        np.save(out / "labels_val.npy", val_df.loc[common, list(targets)].to_numpy(dtype=np.float64))
+        val_lab = val_df.loc[common, list(targets)].to_numpy(dtype=np.float64)
+        np.save(out / "labels_val.npy", val_lab)
         np.save(out / "pred_val.npy", pred_df.loc[common, list(targets)].to_numpy(dtype=np.float64))
+        np.save(out / "ids_val.npy", smiles_global_ids(common, val_idx, full, val_lab.shape[0], "chemprop2"))
     except Exception:
         pass
     vals = [v for v in per if v is not None]
@@ -288,6 +306,7 @@ def main():
     label_mat = test_df.loc[common, targets].to_numpy(dtype=np.float64)
     np.save(out / "pred_test.npy", pred_mat)
     np.save(out / "labels_test.npy", label_mat)
+    np.save(out / "ids_test.npy", smiles_global_ids(common, test_idx, full, pred_mat.shape[0], "chemprop2"))
 
     # Per-target metric (NaN-aware, arithmetic mean across targets).
     per = []

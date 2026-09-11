@@ -13,6 +13,16 @@ Layout under results/<method>/<dataset>/<protocol>/:
   hp_final/<config_id>/seed<S>_em<E>/...
   best_hp.json   (after hp_search)
   <phase>/_summary.json
+
+Row order & ids: every run also writes ids_test.npy (and ids_val.npy where a val split is
+saved) — the global cleaned/<dataset>.csv row index of each prediction row. Join on the id to
+pair rows across methods / back to SMILES; this is the safe key and does not assume matching
+row order. In practice molclr / molfcl / motil / molformer write rows in test-split order so
+their ids == test_idx exactly (duplicate-SMILES safe); chemprop2 / chemeleon join predictions
+on SMILES (so their rows are reordered vs the split) and their ids map each row to the first
+cleaned row with that SMILES within the split — identical molecule, but on datasets with genuine
+same-SMILES/different-label rows it points at one representative (a limitation already inherent
+to their SMILES join, not introduced by ids).
 """
 import argparse
 import json
@@ -180,6 +190,16 @@ def run_job(job: Job, gpu_queue: Queue):
                 _safe_write(job.out_dir / "stderr.log", result.stderr)
                 _safe_write(job.out_dir / "stdout.log", result.stdout)
                 is_oom = "out of memory" in (result.stderr or "").lower()
+                return ("oom" if is_oom else "fail", job, elapsed)
+            # rc==0 is NOT proof of success: a worker prints FAILED/aborting and returns 0 when an
+            # inner step fails (chemprop CLI non-zero, CUDA driver init, missing preds), leaving no
+            # metrics.json. Every method writes metrics.json on success, so a missing one means the
+            # fit produced nothing -> count it as a failure instead of silently logging [ok].
+            if not (job.out_dir / "metrics.json").exists():
+                _safe_write(job.out_dir / "stderr.log", result.stderr)
+                _safe_write(job.out_dir / "stdout.log", result.stdout)
+                combined = ((result.stderr or "") + (result.stdout or "")).lower()
+                is_oom = "out of memory" in combined
                 return ("oom" if is_oom else "fail", job, elapsed)
             return ("ok", job, elapsed)
         finally:
@@ -559,7 +579,7 @@ def main():
           f"{len(args.protocols)} protocols ({args.method}/{args.phase}) ===")
     print(f"max_workers = {len(gpus)} GPUs × {jobs_per_gpu} jobs/gpu = {max_workers}")
 
-    run_jobs_with_retry(all_jobs, gpus, jobs_per_gpu)
+    results = run_jobs_with_retry(all_jobs, gpus, jobs_per_gpu)
 
     # Aggregate per cell after global pool finishes.
     print("\n=== per-cell summaries ===")
@@ -597,6 +617,24 @@ def main():
             (phase_dir / "_summary.json").write_text(json.dumps(summary, indent=2, default=str))
             am = summary.get("agg_am", {}).get("mean") if isinstance(summary, dict) else None
             print(f"  {args.method}/{dataset}/{protocol}/{args.phase}: agg_am={am}")
+
+    # Completeness bookkeeping: a worker exiting 0 is NOT proof it produced output (a fit can crash
+    # and still exit 0), so judge by the artifact — a fit with no metrics.json failed. Exit non-zero
+    # when any are missing so the orchestrator's failed= reflects it instead of reporting a clean grid.
+    # (results counts are cumulative across OOM-retry rounds, so an OOM-then-recovered fit shows in
+    # both oom and ok; the metrics.json scan below is the authoritative final tally.)
+    incomplete = [j for j in all_jobs if not (j.out_dir / "metrics.json").exists()]
+    n_have = len(all_jobs) - len(incomplete)
+    print(f"\n=== run_phase RESULT: {n_have}/{len(all_jobs)} fits have metrics.json; "
+          f"{len(incomplete)} missing (statuses seen: ok={len(results['ok'])} "
+          f"fail={len(results['fail'])} oom={len(results['oom'])} "
+          f"timeout={len(results['timeout'])} done={len(results['done'])}) ===")
+    if incomplete:
+        for j in incomplete[:20]:
+            print(f"    MISSING metrics.json: {j.out_dir}")
+        if len(incomplete) > 20:
+            print(f"    ... and {len(incomplete) - 20} more")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

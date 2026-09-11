@@ -314,6 +314,13 @@ def main():
 
     np.save(out / "pred_test.npy", preds)
     np.save(out / "labels_test.npy", targets)
+    # Global cleaned-CSV row index per prediction row (rows come out of the shuffle=False test loader
+    # in test-split order) so rows join across methods / back to cleaned/<dataset>.csv.
+    _sub = "v1_det_seed0" if cli.protocol == "v1_det" else f"{cli.protocol}_seed{cli.seed}"
+    te = np.load(PIPELINE / "splits" / cli.dataset / _sub / "test_idx.npy")
+    if len(te) != preds.shape[0]:
+        print(f"[motil] WARN: test rows {preds.shape[0]} != |test_idx| {len(te)}; ids_test = local position")
+    np.save(out / "ids_test.npy", te if len(te) == preds.shape[0] else np.arange(preds.shape[0], dtype=np.int64))
 
     per, agg_am, agg_gm = per_target_metric(preds, targets, meta["task_type"], qm_dataset)
 
