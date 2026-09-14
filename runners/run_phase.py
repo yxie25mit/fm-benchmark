@@ -178,30 +178,47 @@ def run_job(job: Job, gpu_queue: Queue):
             job.out_dir.mkdir(parents=True, exist_ok=True)
             env = os.environ.copy()
             env["CUDA_VISIBLE_DEVICES"] = str(gpu)
-            t0 = time.time()
-            try:
-                result = subprocess.run(job.cmd(), env=env, capture_output=True,
-                                        text=True, timeout=108000)  # 30h: headroom for the largest TDC cells; still self-kills a true wedge
-            except subprocess.TimeoutExpired:
-                _safe_write(job.out_dir / "timeout.flag", "")
-                return ("timeout", job, time.time() - t0)
-            elapsed = time.time() - t0
-            if result.returncode != 0:
-                _safe_write(job.out_dir / "stderr.log", result.stderr)
-                _safe_write(job.out_dir / "stdout.log", result.stdout)
-                is_oom = "out of memory" in (result.stderr or "").lower()
-                return ("oom" if is_oom else "fail", job, elapsed)
-            # rc==0 is NOT proof of success: a worker prints FAILED/aborting and returns 0 when an
-            # inner step fails (chemprop CLI non-zero, CUDA driver init, missing preds), leaving no
-            # metrics.json. Every method writes metrics.json on success, so a missing one means the
-            # fit produced nothing -> count it as a failure instead of silently logging [ok].
-            if not (job.out_dir / "metrics.json").exists():
-                _safe_write(job.out_dir / "stderr.log", result.stderr)
-                _safe_write(job.out_dir / "stdout.log", result.stdout)
+            # Per-fit wall-clock cap: a safety net that self-kills a truly wedged job. The old fixed
+            # 30h was sized for TDC/MoleculeNet; large datasets (e.g. 72k rows) legitimately train
+            # longer, so it's env-configurable with a 120h default — set PIPELINE_JOB_TIMEOUT_SEC
+            # (seconds) higher for bigger runs, or lower to tighten the wedge-catcher.
+            job_timeout = int(os.environ.get("PIPELINE_JOB_TIMEOUT_SEC", str(120 * 3600)))
+            # A few MolFormer QR fits die with a transient MAGMA/driver error on some GPUs (e.g. H100
+            # "MAGMA error: function-specific error ... magma_sgeqrf_gpu"); re-running the SAME command
+            # clears it. Retry in place a bounded number of times. Off with PIPELINE_MAGMA_RETRIES=0.
+            magma_retries = int(os.environ.get("PIPELINE_MAGMA_RETRIES", "2"))
+            magma_sleep = float(os.environ.get("PIPELINE_MAGMA_RETRY_SLEEP", "10"))
+            t_start = time.time()
+            attempt = 0
+            while True:
+                t0 = time.time()
+                try:
+                    result = subprocess.run(job.cmd(), env=env, capture_output=True,
+                                            text=True, timeout=job_timeout)
+                except subprocess.TimeoutExpired:
+                    _safe_write(job.out_dir / "timeout.flag", "")
+                    return ("timeout", job, time.time() - t_start)
+                elapsed = time.time() - t0
+                # rc==0 is NOT proof of success: a worker prints FAILED/aborting and returns 0 when an
+                # inner step fails (chemprop CLI non-zero, CUDA driver init, missing preds), leaving no
+                # metrics.json. Every method writes metrics.json on success, so treat rc!=0 OR a missing
+                # metrics.json as a failed fit instead of silently logging [ok].
+                if result.returncode == 0 and (job.out_dir / "metrics.json").exists():
+                    return ("ok", job, elapsed)
                 combined = ((result.stderr or "") + (result.stdout or "")).lower()
                 is_oom = "out of memory" in combined
-                return ("oom" if is_oom else "fail", job, elapsed)
-            return ("ok", job, elapsed)
+                # Transient MAGMA error (NOT an OOM surfacing through magma, which is a real memory
+                # problem that must go to the OOM step-down path, not an in-place retry).
+                is_magma_transient = (("magma error" in combined) or ("magma_sgeqrf" in combined)) and not is_oom
+                if is_magma_transient and attempt < magma_retries:
+                    attempt += 1
+                    print(f"  [magma-retry {attempt}/{magma_retries}] {job} (transient MAGMA error)")
+                    if magma_sleep > 0:
+                        time.sleep(magma_sleep)
+                    continue
+                _safe_write(job.out_dir / "stderr.log", result.stderr)
+                _safe_write(job.out_dir / "stdout.log", result.stdout)
+                return ("oom" if is_oom else "fail", job, time.time() - t_start)
         finally:
             gpu_queue.put(gpu)
     except Exception as e:
