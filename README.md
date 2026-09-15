@@ -420,3 +420,10 @@ python collect_results.py --dataset mydata_sliding --protocol custom --learning-
   ~67% by default). To anchor the curve at the full window, include a size ≥ that (it caps to 100%).
 - Run it on **`mydata_sliding`** (not `_chrono`): the curve's error bars come from the 3 folds. `molformer`
   needs `--jobs-per-gpu 1` here too.
+- **What `collect_results --learning-curve` gives you:** each point is the **ensemble** metric = the 5
+  members' `pred_test.npy` averaged then scored once (metric-of-mean, the same ensembling as the headline
+  table — *not* an average of per-model scores), reported per fold and then as **mean ± std across the folds**
+  at each size. `--out curve.csv` writes columns `method, train_size, metric, test_metric_mean,
+  test_metric_std, n_folds, per_fold`, plus a companion `curve.folds.json` with the full per-fold breakdown;
+  `--plot` writes the PNG. The metric is the dataset's own (RMSE/MAE for regression, ROC-AUC for
+  classification, or the TDC-prescribed metric).

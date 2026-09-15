@@ -21,9 +21,35 @@ ALL_METHODS = ["chemprop2", "chemprop2_nofp", "chemeleon", "chemeleon_nofp",
                "molclr", "molfcl", "motil", "molformer"]
 
 
+def _metric_name(task_type, qm, prescribed):
+    if prescribed:
+        return prescribed
+    return "mae" if (task_type != "cls" and qm) else ("roc_auc" if task_type == "cls" else "rmse")
+
+
 def learning_curve(args):
-    """Per (method, train-size): mean±std test metric across subsample repeats -> a curve."""
-    rows = []
+    """Per (method, train-size): the ENSEMBLE test metric per fold, then mean±std across folds.
+
+    Ensembling is metric-of-mean (average the members' pred_test.npy, score once) via the SAME
+    ensemble_metric_for_seed the main pipeline/default table uses — NOT mean-of-members — so the
+    curve reports true ensemble performance and its full-size point matches the headline table.
+    Error bars are the spread across folds (--seeds = the sliding folds)."""
+    import sys
+    sys.path.insert(0, str(PIPELINE / "methods"))
+    from _eval import ensemble_metric_for_seed  # noqa: E402
+
+    meta_path = PIPELINE / "cleaned" / f"{args.dataset}.meta.json"
+    if not meta_path.exists():
+        print(f"No meta.json for {args.dataset} (looked in cleaned/). Was the dataset prepared?")
+        return
+    meta = json.loads(meta_path.read_text())
+    task_type = meta["task_type"]
+    qm = args.dataset in ("qm7", "qm8", "qm9")
+    prescribed_metric = meta["metric"] if meta.get("source") == "tdc" else None
+    metric_name = _metric_name(task_type, qm, prescribed_metric)
+
+    rows = []       # (method, size, mean, std, n_folds) — for the table/CSV/plot
+    detail = {}     # method -> size -> {fold_seed: ensemble_metric}
     for method in args.methods:
         lc_root = PIPELINE / "results" / method / args.dataset / "learning_curve" / args.protocol
         if not lc_root.exists():
@@ -33,33 +59,58 @@ def learning_curve(args):
             if not digits:
                 continue
             size = int(digits)
-            by_seed = {}   # each repeat = one point; average ensemble members within it
-            for cell in size_dir.glob("seed*_em*/metrics.json"):
-                seed = cell.parent.name.split("_em")[0]
-                v = json.loads(cell.read_text()).get("test_metric")
-                if v is not None:
-                    by_seed.setdefault(seed, []).append(v)
-            pts = [statistics.mean(vs) for vs in by_seed.values() if vs]
-            if pts:
-                std = statistics.pstdev(pts) if len(pts) > 1 else 0.0
-                rows.append((method, size, statistics.mean(pts), std, len(pts)))
+            # group ensemble-member dirs by fold (seed), then metric-of-mean within each fold
+            by_fold = {}
+            for cell in size_dir.glob("seed*_em*"):
+                if cell.is_dir():
+                    by_fold.setdefault(cell.name.split("_em")[0], []).append(cell)
+            fold_vals = {}
+            for seed, member_dirs in by_fold.items():
+                am, _, _ = ensemble_metric_for_seed(sorted(member_dirs), task_type, qm,
+                                                    metric=prescribed_metric)
+                if am is not None:
+                    fold_vals[seed] = am
+            if fold_vals:
+                vals = list(fold_vals.values())
+                std = statistics.pstdev(vals) if len(vals) > 1 else 0.0
+                rows.append((method, size, statistics.mean(vals), std, len(vals)))
+                detail.setdefault(method, {})[size] = fold_vals
     if not rows:
         print(f"No learning-curve results under results/<method>/{args.dataset}/learning_curve/"
               f"{args.protocol}/. Has run_learning_curve.py finished?")
         return
     rows.sort(key=lambda r: (r[0], r[1]))
-    print(f"\nLearning curve  |  {args.dataset}  protocol={args.protocol}\n")
-    print(f"{'method':<14}{'train_size':>11}{'test_metric':>13}{'std':>9}{'repeats':>9}")
-    print("-" * 56)
+    print(f"\nLearning curve  |  {args.dataset}  protocol={args.protocol}  metric={metric_name} "
+          f"(ensemble = mean of member predictions, scored once)\n")
+    print(f"{'method':<14}{'train_size':>11}{metric_name[:11]:>13}{'std':>9}{'n_folds':>9}   per-fold")
+    print("-" * 74)
     for method, size, mean, std, n in rows:
-        print(f"{method:<14}{size:>11}{mean:>13.4f}{std:>9.4f}{n:>9}")
+        pf = detail[method][size]
+        pf_str = " ".join(f"{s}={v:.4f}" for s, v in sorted(pf.items()))
+        print(f"{method:<14}{size:>11}{mean:>13.4f}{std:>9.4f}{n:>9}   {pf_str}")
     if args.out:
         import csv
         with open(args.out, "w", newline="") as fh:
             w = csv.writer(fh)
-            w.writerow(["method", "train_size", "test_metric_mean", "test_metric_std", "repeats"])
-            w.writerows(rows)
+            w.writerow(["method", "train_size", "metric", "test_metric_mean",
+                        "test_metric_std", "n_folds", "per_fold"])
+            for method, size, mean, std, n in rows:
+                pf = detail[method][size]
+                pf_str = ";".join(f"{s}={v}" for s, v in sorted(pf.items()))
+                w.writerow([method, size, metric_name, mean, std, n, pf_str])
         print(f"\nwrote {args.out}")
+        # companion JSON with the full per-fold breakdown for programmatic use / sharing
+        jpath = str(args.out).rsplit(".", 1)[0] + ".folds.json"
+        payload = {"dataset": args.dataset, "protocol": args.protocol, "metric": metric_name,
+                   "ensembling": "metric-of-mean (avg member predictions, score once)",
+                   "curves": {m: {str(sz): {"mean": statistics.mean(fv.values()),
+                                            "std": statistics.pstdev(list(fv.values())) if len(fv) > 1 else 0.0,
+                                            "n_folds": len(fv), "per_fold": fv}
+                                  for sz, fv in sizes.items()}
+                              for m, sizes in detail.items()}}
+        with open(jpath, "w") as fh:
+            json.dump(payload, fh, indent=2)
+        print(f"wrote {jpath}")
     if args.plot:
         _plot_curve(rows, args)
 
