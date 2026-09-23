@@ -193,14 +193,16 @@ def main():
     te = np.load(sdir / "test_idx.npy")
     n_test = np.asarray(test_pred).shape[0]
     if len(te) != n_test:
-        print(f"[molclr] WARN: test rows {n_test} != |test_idx| {len(te)}; ids_test = local position")
-    np.save(out / "ids_test.npy", te if len(te) == n_test else np.arange(n_test, dtype=np.int64))
+        print(f"[molclr] WARN: test rows {n_test} != |test_idx| {len(te)}; not writing ids_test")
+    else:
+        np.save(out / "ids_test.npy", te)
     if getattr(fine_tune, "val_predictions", None) is not None:
         np.save(out / "pred_val.npy", fine_tune.val_predictions)
         np.save(out / "labels_val.npy", fine_tune.val_labels)
         va = np.load(sdir / "val_idx.npy")
         n_val = np.asarray(fine_tune.val_predictions).shape[0]
-        np.save(out / "ids_val.npy", va if len(va) == n_val else np.arange(n_val, dtype=np.int64))
+        if len(va) == n_val:
+            np.save(out / "ids_val.npy", va)
     # Compute both AM (canonical) and GM aggregations from per-target list.
     valid_vals = [v for v in fine_tune.test_per_target if v is not None]
     agg_am = float(np.mean(valid_vals)) if valid_vals else None

@@ -534,11 +534,12 @@ def main():
     ids_test, ids_ok = cleaned_csv_ids(splits["test"], preds.shape[0], test_order, resorted)
     if not resorted:
         print(f"[molformer] WARN: test rows left in loader order (order usable={test_order is not None}); "
-              f"ids_test {'joins to cleaned CSV' if ids_ok else 'is local position only'}")
+              f"{'ids_test joins to cleaned CSV' if ids_ok else 'ids_test not written (no exact mapping)'}")
 
     np.save(out / "pred_test.npy", preds)
     np.save(out / "labels_test.npy", targets)
-    np.save(out / "ids_test.npy", ids_test)
+    if ids_ok:
+        np.save(out / "ids_test.npy", ids_test)
 
     per, agg_am, agg_gm = per_target_metric(preds.astype(np.float64), targets, task_type, qm_dataset)
 
@@ -565,13 +566,14 @@ def main():
             val_preds, vok_p = reindex_to_dataset_order(val_preds, val_order)
             val_targets, vok_t = reindex_to_dataset_order(val_targets, val_order)
             v_resorted = vok_p and vok_t
-            ids_val, _ = cleaned_csv_ids(splits["val"], val_preds.shape[0], val_order, v_resorted)
+            ids_val, ids_val_ok = cleaned_csv_ids(splits["val"], val_preds.shape[0], val_order, v_resorted)
             # Save val preds+labels so pick_best_hp can re-score with the prescribed
             # TDC metric (harmless for MoleculeNet, where it is unused).
             try:
                 np.save(out / "pred_val.npy", val_preds)
                 np.save(out / "labels_val.npy", val_targets)
-                np.save(out / "ids_val.npy", ids_val)
+                if ids_val_ok:
+                    np.save(out / "ids_val.npy", ids_val)
             except Exception:
                 pass
             _, val_metric, _ = per_target_metric(val_preds, val_targets, task_type, qm_dataset)

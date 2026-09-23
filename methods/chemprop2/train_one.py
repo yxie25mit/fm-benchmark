@@ -54,16 +54,17 @@ DEFAULT_HP = {
 def smiles_global_ids(common, split_idx, full, n_rows, tag):
     """Global cleaned-CSV row index for each saved row so rows join across methods / back to
     cleaned/<dataset>.csv. Rows follow `common` (a SMILES intersection, so this method reorders vs
-    the split); each SMILES maps to the first cleaned row with that SMILES within the split (the same
-    molecule for duplicate-SMILES datasets). Falls back to local position if lengths disagree."""
+    the split) and are taken with .loc[common], which returns every split row carrying that SMILES, in
+    split order — so a repeated SMILES expands to all its split rows here too. Returns None (and the
+    caller writes no ids file) if the mapping cannot be made exact; never a positional stand-in."""
     sm = full["smiles"].to_numpy()
-    gidx = {}
+    positions = {}
     for i in split_idx:
-        gidx.setdefault(sm[i], int(i))
-    ids = np.array([gidx[s] for s in common if s in gidx], dtype=np.int64)
+        positions.setdefault(sm[i], []).append(int(i))
+    ids = np.array([g for s in common for g in positions.get(s, [])], dtype=np.int64)
     if len(ids) != n_rows:
-        print(f"[{tag}] WARN: id rows {len(ids)} != pred rows {n_rows}; ids = local position")
-        return np.arange(n_rows, dtype=np.int64)
+        print(f"[{tag}] WARN: id rows {len(ids)} != pred rows {n_rows}; not writing ids")
+        return None
     return ids
 
 
@@ -179,7 +180,9 @@ def compute_val_metric(out, scratch_root, dataset, protocol, seed, targets, task
         val_lab = val_df.loc[common, list(targets)].to_numpy(dtype=np.float64)
         np.save(out / "labels_val.npy", val_lab)
         np.save(out / "pred_val.npy", pred_df.loc[common, list(targets)].to_numpy(dtype=np.float64))
-        np.save(out / "ids_val.npy", smiles_global_ids(common, val_idx, full, val_lab.shape[0], "chemprop2"))
+        val_ids = smiles_global_ids(common, val_idx, full, val_lab.shape[0], "chemprop2")
+        if val_ids is not None:
+            np.save(out / "ids_val.npy", val_ids)
     except Exception:
         pass
     vals = [v for v in per if v is not None]
@@ -306,7 +309,9 @@ def main():
     label_mat = test_df.loc[common, targets].to_numpy(dtype=np.float64)
     np.save(out / "pred_test.npy", pred_mat)
     np.save(out / "labels_test.npy", label_mat)
-    np.save(out / "ids_test.npy", smiles_global_ids(common, test_idx, full, pred_mat.shape[0], "chemprop2"))
+    test_ids = smiles_global_ids(common, test_idx, full, pred_mat.shape[0], "chemprop2")
+    if test_ids is not None:
+        np.save(out / "ids_test.npy", test_ids)
 
     # Per-target metric (NaN-aware, arithmetic mean across targets).
     per = []

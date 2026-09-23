@@ -427,3 +427,53 @@ python collect_results.py --dataset mydata_sliding --protocol custom --learning-
   test_metric_std, n_folds, per_fold`, plus a companion `curve.folds.json` with the full per-fold breakdown;
   `--plot` writes the PNG. The metric is the dataset's own (RMSE/MAE for regression, ROC-AUC for
   classification, or the TDC-prescribed metric).
+
+## Paired Wilcoxon test on the tuned results (per-molecule significance)
+One command per split type: it recovers which molecule every saved prediction row is (works for runs made
+before or after the row-order fix, or a mix), averages the 5 ensemble members per molecule, checks the result
+against the pipeline's own numbers, and runs a one-sided paired Wilcoxon test of each foundation model vs
+Chemprop (Benjamini-Hochberg across all comparisons in the file). Nothing is retrained; it takes seconds to
+a few minutes. Run from the repo root with the **chemprop2** env python, and point `--molformer-python` at the
+molformer env. Only the output CSV needs to be sent back (no molecules, labels or predictions).
+
+```bash
+source config/env.sh                                  # sets PIPELINE_CONDA_ENVS (see Setup step 3)
+PY=$PIPELINE_CONDA_ENVS/chemprop2/bin/python
+MF=$PIPELINE_CONDA_ENVS/molformer/bin/python
+
+# Time sliding window (most people) — list every *_sliding dataset you tuned
+$PY scripts/wilcoxon_from_results.py --phase hp_final --protocol custom \
+    --datasets mydata_sliding otherdata_sliding --molformer-python $MF --out wilcoxon_time_sliding.csv
+```
+Only if you also ran HP tuning on these splits (one command each, never mix split types in one command):
+```bash
+# Time chronological (single fold)
+$PY scripts/wilcoxon_from_results.py --phase hp_final --protocol custom \
+    --datasets mydata_chrono otherdata_chrono --molformer-python $MF --out wilcoxon_time_chrono.csv
+# Scaffold v1 (preshuffle)
+$PY scripts/wilcoxon_from_results.py --phase hp_final --protocol v1_preshuffle \
+    --datasets mydata otherdata --molformer-python $MF --out wilcoxon_scaffold_v1.csv
+# Scaffold v2 (astartes)
+$PY scripts/wilcoxon_from_results.py --phase hp_final --protocol v2_astartes \
+    --datasets mydata otherdata --molformer-python $MF --out wilcoxon_scaffold_v2.csv
+```
+- The baseline is `chemprop2`; where the no-descriptor variant won on validation, add
+  `--baseline-for mydata_sliding=chemprop2_nofp` (one `DATASET=METHOD` per dataset).
+- Per-molecule files are written under `--workdir` (default `wilcoxon_run/`) — keep them on your side.
+
+**What to check in the output**
+- **Alignment report:** every method/fold should read `ALIGNED`. `NOT ALIGNED` lines give the reason; such a
+  method is dropped from the test entirely and listed at the end under *Excluded* — re-run those cells with
+  the current code (common causes: cleaned/splits regenerated after the run, an old checkout, or not using
+  the chemprop2 env python).
+- **Check against `_summary.json`:** each method should say `matches _summary.json exactly`. If you see
+  `DATA MISMATCH` or `UNEXPLAINED`, the command stops (`STOPPED`, no output file) — the saved files do not
+  match what the pipeline scored; tell us rather than working around it.
+- **`CORRECTED folds`** (molformer only): the pipeline's reported tuned number for those folds was computed on
+  mispaired rows (an older molformer version); the recovered, correct one is used in the test. Worth noting
+  when you report molformer's tuned metric.
+- **`order_ambiguous` rows:** molformer's row order could not be decided from its predictions (near-chance or
+  very small folds); the test ran under both possible orders and the larger p is reported. Check
+  `conclusion_agrees` — significance is only claimed when both orders give it.
+- **Warnings from the test itself** (`y_true disagrees`, `rows have no partner`) mean the two files do not
+  describe the same test set — stop and check rather than ignoring.
