@@ -95,10 +95,11 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 N_PARTS = 30           # Chemprop paper: "divide all the test molecules into 30 equal parts"
 MIN_UNITS = 10         # below this the signed-rank test has no useful power
 
-METRICS = ("mae", "rmse", "spearman", "roc-auc", "pr-auc")
+METRICS = ("mae", "rmse", "brier", "spearman", "roc-auc", "pr-auc")
+DECOMPOSABLE = ("mae", "rmse", "brier")     # defined per molecule -> one unit per molecule
 # Metrics where a larger value is better. Errors are always sign-flipped so
 # that SMALLER is better, which is what the one-sided test assumes.
-MAXIMIZE = {"mae": False, "rmse": False, "spearman": True,
+MAXIMIZE = {"mae": False, "rmse": False, "brier": False, "spearman": True,
             "roc-auc": True, "pr-auc": True}
 
 
@@ -170,8 +171,8 @@ def unit_errors(y, pred, metric, rng):
     Returns (errors, unit_name). For decomposable metrics there is one value
     per molecule; for rank metrics there are N_PARTS values per fold.
     """
-    if metric in ("mae", "rmse"):
-        e = np.abs(y - pred) if metric == "mae" else (y - pred) ** 2
+    if metric in DECOMPOSABLE:
+        e = np.abs(y - pred) if metric == "mae" else (y - pred) ** 2   # rmse and brier: squared error
         return e, "molecule"
 
     # Rank metrics: score within each of 30 partitions of this fold.
@@ -189,42 +190,74 @@ def unit_errors(y, pred, metric, rng):
     return (-v if MAXIMIZE[metric] else v), f"1/{N_PARTS} test-set chunk"
 
 
-def compare(base_path, cand_path, metric, name, seed=None):
+def _row_key(m):
+    """Identity of a test row across folds: the `id` column if present, else (smiles, y_true)."""
+    if "id" in m.columns:
+        return m["id"].astype(str)
+    return m["smiles"].astype(str) + "|" + m["y_true_b"].round(9).astype(str)
+
+
+def compare(base_path, cand_path, metric, name, seed=None, pool_folds=False):
+    """One paired test. When the same test molecule appears in more than one fold (scaffold seeds share test
+    molecules; TDC folds share the whole test set), pooling folds would count it several times and the test
+    would overstate the evidence. By default each molecule then contributes ONE unit: for MAE/RMSE/Brier its
+    error averaged over the folds it is tested in; for rank metrics its prediction averaged over those folds,
+    then one 30-part test over the distinct molecules. Folds that share no molecules (time sliding windows,
+    a single chrono fold) are handled exactly as before. pool_folds=True restores the old pooled behaviour."""
     if metric not in METRICS:
         sys.exit(f"unknown --metric {metric!r}; choose from {list(METRICS)}")
     m = align(load_preds(base_path), load_preds(cand_path))
-    rng = np.random.default_rng(_seed_from(name, seed))
+    if metric == "brier" and not set(np.unique(m.y_true_b)) <= {0.0, 1.0}:
+        sys.exit(f"{name}: brier needs 0/1 labels")
+    m = m.assign(_key=_row_key(m))
+    repeated = bool(m.groupby("_key").size().gt(1).any())
+    dedup = repeated and not pool_folds
 
-    eb_all, ec_all, unit = [], [], None
-    for fold, g in m.groupby("fold", sort=True):
-        y = g.y_true_b.to_numpy(float)
-        # Both models share one partition per fold, so the pairing is preserved.
-        rng_fold = np.random.default_rng(_seed_from(f"{name}|fold={fold}", seed))
-        eb, unit = unit_errors(y, g.y_pred_b.to_numpy(float), metric, rng_fold)
-        rng_fold = np.random.default_rng(_seed_from(f"{name}|fold={fold}", seed))
-        ec, _ = unit_errors(y, g.y_pred_c.to_numpy(float), metric, rng_fold)
-        eb_all.append(eb)
-        ec_all.append(ec)
-
-    eb = np.concatenate(eb_all)
-    ec = np.concatenate(ec_all)
+    if dedup and metric in DECOMPOSABLE:
+        per_row_b, _ = unit_errors(m.y_true_b.to_numpy(float), m.y_pred_b.to_numpy(float), metric, None)
+        per_row_c, _ = unit_errors(m.y_true_b.to_numpy(float), m.y_pred_c.to_numpy(float), metric, None)
+        g = pd.DataFrame({"k": m._key.to_numpy(), "b": per_row_b, "c": per_row_c}).groupby("k", sort=True).mean()
+        eb, ec = g.b.to_numpy(), g.c.to_numpy()
+        unit = "distinct molecule (error averaged over the folds it is tested in)"
+    elif dedup:
+        g = m.groupby("_key", sort=True).agg(y=("y_true_b", "mean"), pb=("y_pred_b", "mean"), pc=("y_pred_c", "mean"))
+        rng = np.random.default_rng(_seed_from(f"{name}|distinct", seed))
+        eb, _ = unit_errors(g.y.to_numpy(float), g.pb.to_numpy(float), metric, rng)
+        rng = np.random.default_rng(_seed_from(f"{name}|distinct", seed))
+        ec, _ = unit_errors(g.y.to_numpy(float), g.pc.to_numpy(float), metric, rng)
+        unit = f"1/{N_PARTS} of distinct molecules (prediction averaged over the folds each is tested in)"
+    else:
+        eb_all, ec_all, unit = [], [], None
+        for fold, g in m.groupby("fold", sort=True):
+            y = g.y_true_b.to_numpy(float)
+            # Both models share one partition per fold, so the pairing is preserved.
+            rng_fold = np.random.default_rng(_seed_from(f"{name}|fold={fold}", seed))
+            eb, unit = unit_errors(y, g.y_pred_b.to_numpy(float), metric, rng_fold)
+            rng_fold = np.random.default_rng(_seed_from(f"{name}|fold={fold}", seed))
+            ec, _ = unit_errors(y, g.y_pred_c.to_numpy(float), metric, rng_fold)
+            eb_all.append(eb)
+            ec_all.append(ec)
+        eb, ec = np.concatenate(eb_all), np.concatenate(ec_all)
     keep = np.isfinite(eb) & np.isfinite(ec)
     eb, ec = eb[keep], ec[keep]
 
-    row = {"name": name, "metric": metric, "unit": unit,
-           "n_folds": int(m.fold.nunique()), "n_units": int(len(eb))}
+    row = {"name": name, "metric": metric, "unit": unit, "n_folds": int(m.fold.nunique()),
+           "n_rows": int(len(m)), "n_distinct": int(m._key.nunique()),
+           "folds_share_molecules": repeated, "n_units": int(len(eb))}
     if len(eb) < MIN_UNITS:
-        row.update(statistic=np.nan, p_wilcoxon=np.nan, median_delta=np.nan,
+        row.update(statistic=np.nan, p_wilcoxon=np.nan, p_baseline_better=np.nan, median_delta=np.nan,
                    note=f"only {len(eb)} usable units (< {MIN_UNITS})")
         return row
     if np.allclose(eb, ec):
-        row.update(statistic=np.nan, p_wilcoxon=1.0, median_delta=0.0,
+        row.update(statistic=np.nan, p_wilcoxon=1.0, p_baseline_better=1.0, median_delta=0.0,
                    note="identical predictions")
         return row
 
-    # alternative="less": candidate error stochastically smaller => candidate better
+    # alternative="less": candidate error stochastically smaller => candidate better (the headline test)
     stat, p = wilcoxon(ec, eb, alternative="less", zero_method="wilcox")
-    row.update(statistic=float(stat), p_wilcoxon=float(p),
+    # reverse direction: baseline better (lets you say "Chemprop is significantly better")
+    _, p_rev = wilcoxon(ec, eb, alternative="greater", zero_method="wilcox")
+    row.update(statistic=float(stat), p_wilcoxon=float(p), p_baseline_better=float(p_rev),
                median_delta=float(np.median(eb - ec)), note="")
     return row
 
@@ -259,6 +292,9 @@ def main():
     ap.add_argument("--out", help="write results here as CSV")
     ap.add_argument("--seed", type=int, default=None,
                     help="override the partition seed (default: derived from --name)")
+    ap.add_argument("--pool-folds", action="store_true",
+                    help="old behaviour: pool rows of all folds even when folds share test molecules "
+                         "(counts such molecules several times; only for reproducing earlier tables)")
     a = ap.parse_args()
 
     if a.manifest:
@@ -266,19 +302,21 @@ def main():
         need = {"name", "metric", "baseline", "candidate"}
         if not need <= set(man.columns):
             sys.exit(f"manifest needs columns {sorted(need)}; found {list(man.columns)}")
-        rows = [compare(r.baseline, r.candidate, r.metric, r["name"], a.seed)
+        rows = [compare(r.baseline, r.candidate, r.metric, r["name"], a.seed, a.pool_folds)
                 for _, r in man.iterrows()]
         res = pd.DataFrame(rows)
         res["q_bh"] = bh(res.p_wilcoxon)
         res["significant"] = res.q_bh < 0.05
+        res["q_bh_baseline_better"] = bh(res.p_baseline_better)
+        res["baseline_significantly_better"] = res.q_bh_baseline_better < 0.05
     else:
         if not (a.baseline and a.candidate and a.metric):
             sys.exit("need --baseline, --candidate and --metric (or --manifest)")
-        res = pd.DataFrame([compare(a.baseline, a.candidate, a.metric, a.name, a.seed)])
+        res = pd.DataFrame([compare(a.baseline, a.candidate, a.metric, a.name, a.seed, a.pool_folds)])
 
-    cols = ["name", "metric", "unit", "n_folds", "n_units",
-            "median_delta", "statistic", "p_wilcoxon"]
-    cols += [c for c in ("q_bh", "significant", "note") if c in res.columns]
+    cols = ["name", "metric", "n_folds", "n_distinct", "n_units", "median_delta", "statistic", "p_wilcoxon"]
+    cols += [c for c in ("q_bh", "significant", "p_baseline_better", "q_bh_baseline_better",
+                         "baseline_significantly_better", "note") if c in res.columns]
     with pd.option_context("display.width", 200, "display.max_columns", 50):
         print(res[cols].to_string(index=False))
     if a.out:

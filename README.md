@@ -431,8 +431,8 @@ python collect_results.py --dataset mydata_sliding --protocol custom --learning-
 ## Paired Wilcoxon test on the tuned results (per-molecule significance)
 One command per split type: it recovers which molecule every saved prediction row is (works for runs made
 before or after the row-order fix, or a mix), averages the 5 ensemble members per molecule, checks the result
-against the pipeline's own numbers, and runs a one-sided paired Wilcoxon test of each foundation model vs
-Chemprop (Benjamini-Hochberg across all comparisons in the file). Nothing is retrained; it takes seconds to
+against the pipeline's own numbers, and runs a paired Wilcoxon test of each foundation model vs the Chemprop
+baseline (Benjamini-Hochberg across all comparisons in the file). Nothing is retrained; it takes seconds to
 a few minutes. Run from the repo root with the **chemprop2** env python, and point `--molformer-python` at the
 molformer env. Only the output CSV needs to be sent back (no molecules, labels or predictions).
 
@@ -457,8 +457,18 @@ $PY scripts/wilcoxon_from_results.py --phase hp_final --protocol v1_preshuffle \
 $PY scripts/wilcoxon_from_results.py --phase hp_final --protocol v2_astartes \
     --datasets mydata otherdata --molformer-python $MF --out wilcoxon_scaffold_v2.csv
 ```
-- The baseline is `chemprop2`; where the no-descriptor variant won on validation, add
-  `--baseline-for mydata_sliding=chemprop2_nofp` (one `DATASET=METHOD` per dataset).
+- **Baseline:** per dataset, whichever of `chemprop2` / `chemprop2_nofp` has the better *validation* score in
+  these tuned results (columns `baseline`, `val_chemprop2`, `val_chemprop2_nofp`). Override with
+  `--baseline chemprop2` or `--baseline-for mydata_sliding=chemprop2_nofp`.
+- **One unit per molecule:** error metrics (MAE/RMSE/Brier) are paired per molecule; ranking metrics
+  (ROC-AUC, PR-AUC, Spearman) per chunk (30 random chunks per fold). A molecule that is in the test set of
+  several folds (scaffold seeds, repeated seeds on one fixed split) is averaged and counted once — otherwise
+  it would be counted several times and p would come out too small. Time-split folds do not overlap, so
+  nothing changes there. `n_distinct` / `folds_share_molecules` show when this happened.
+- **Columns:** `p_wilcoxon` / `q_bh` / `significant` = foundation model *better* than Chemprop (the headline);
+  `p_baseline_better` / `q_bh_baseline_better` = the reverse test, i.e. Chemprop significantly better.
+  Classification datasets also get a Brier-score test (`brier_*` columns, its own BH family): it rewards
+  calibrated probabilities as well as correct ranking, so it complements ROC-AUC rather than replacing it.
 - Per-molecule files are written under `--workdir` (default `wilcoxon_run/`) — keep them on your side.
 
 **What to check in the output**
@@ -475,5 +485,7 @@ $PY scripts/wilcoxon_from_results.py --phase hp_final --protocol v2_astartes \
 - **`order_ambiguous` rows:** molformer's row order could not be decided from its predictions (near-chance or
   very small folds); the test ran under both possible orders and the larger p is reported. Check
   `conclusion_agrees` — significance is only claimed when both orders give it.
+- **Baseline line** (`baseline for mydata: chemprop2 (better validation …)`): should say it chose from
+  validation. `no validation scores found` means `pred_val.npy`/`metrics.json` are missing — tell us.
 - **Warnings from the test itself** (`y_true disagrees`, `rows have no partner`) mean the two files do not
   describe the same test set — stop and check rather than ignoring.
