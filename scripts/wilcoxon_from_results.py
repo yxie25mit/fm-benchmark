@@ -111,20 +111,23 @@ def main():
 
         meta = json.loads((root / "cleaned" / f"{dataset}.meta.json").read_text())
         metric = args.metric or align.headline_metric(meta)
+        by_target = {}
+        for f in sorted(inputs.glob("*.csv")):
+            method, _, target = f.stem.partition("__")
+            by_target.setdefault(target, {})[method] = f
+        usable = sorted(v for v in CHEMPROP_VARIANTS
+                        if v not in incomplete and by_target and all(v in files for files in by_target.values()))
         if dataset in baseline_for:
             baseline, choice = baseline_for[dataset], {"baseline_rule": "--baseline-for"}
         elif args.baseline != "auto":
             baseline, choice = args.baseline, {"baseline_rule": "--baseline"}
         else:
-            baseline, choice = choose_baseline(root, dataset, args.protocol, args.phase, args.config, metric, align)
+            baseline, choice = choose_baseline(root, dataset, args.protocol, args.phase, args.config, metric, align, usable)
         choice["baseline"] = baseline
-        print(f"  baseline for {dataset}: {baseline}  ({choice['baseline_rule']}; validation "
-              f"chemprop2={choice.get('val_chemprop2')}, chemprop2_nofp={choice.get('val_chemprop2_nofp')})")
+        scores = (f"; validation chemprop2={choice['val_chemprop2']}, chemprop2_nofp={choice['val_chemprop2_nofp']}"
+                  if "val_chemprop2" in choice else "")
+        print(f"  baseline for {dataset}: {baseline}  ({choice['baseline_rule']}{scores})")
         is_classification = meta["task_type"] == "cls"
-        by_target = {}
-        for f in sorted(inputs.glob("*.csv")):
-            method, _, target = f.stem.partition("__")
-            by_target.setdefault(target, {})[method] = f
         for target, files in by_target.items():
             label = dataset + (f" / {target}" if target else "")
             if baseline not in files or baseline in incomplete:
@@ -256,10 +259,14 @@ def validation_score(root, method, dataset, protocol, phase, config, metric, ali
             float(np.mean(from_json)) if len(from_json) == n_folds else None)
 
 
-def choose_baseline(root, dataset, protocol, phase, config, metric, align):
-    """chemprop2 vs chemprop2_nofp: the one with the better validation score on these results. Both are scored
-    from the same source (saved validation predictions if both have them, else metrics.json val_metric)."""
-    scores = {v: validation_score(root, v, dataset, protocol, phase, config, metric, align) for v in sorted(CHEMPROP_VARIANTS)}
+def choose_baseline(root, dataset, protocol, phase, config, metric, align, usable):
+    """chemprop2 vs chemprop2_nofp: of the variants aligned on every fold (`usable`), the one with the better
+    validation score on these results. Both are scored from the same source (saved validation predictions if
+    both have them, else metrics.json val_metric)."""
+    if len(usable) < 2:
+        return (usable[0] if usable else "chemprop2"), {
+            "baseline_rule": "only aligned Chemprop variant" if usable else "no aligned Chemprop variant"}
+    scores = {v: validation_score(root, v, dataset, protocol, phase, config, metric, align) for v in usable}
     source = 0 if all(s[0] is not None for s in scores.values()) else (1 if all(s[1] is not None for s in scores.values()) else None)
     if source is None:
         have = [v for v, s in scores.items() if s[0] is not None or s[1] is not None]

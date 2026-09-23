@@ -487,5 +487,6 @@ $PY scripts/wilcoxon_from_results.py --phase hp_final --protocol v2_astartes \
   `conclusion_agrees` — significance is only claimed when both orders give it.
 - **Baseline line** (`baseline for mydata: chemprop2 (better validation …)`): should say it chose from
   validation. `no validation scores found` means `pred_val.npy`/`metrics.json` are missing — tell us.
+  `only aligned Chemprop variant` means the other variant was not run or is listed under *Excluded*.
 - **Warnings from the test itself** (`y_true disagrees`, `rows have no partner`) mean the two files do not
   describe the same test set — stop and check rather than ignoring.
