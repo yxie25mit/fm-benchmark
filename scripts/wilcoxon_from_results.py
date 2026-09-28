@@ -28,6 +28,14 @@ test "foundation model better" (p_wilcoxon, q_bh, significant — the headline),
 classification a Brier-score test (brier_*: calibration + ranking, reported next to the ROC-AUC/PR-AUC test).
 Molecules shared by several folds (scaffold splits) count once (see wilcoxon_paired.py).
 Override the baseline with --baseline chemprop2 (all datasets) or --baseline-for DATASET=chemprop2_nofp.
+
+Learning curves: --learning-curve SIZE [SIZE ...] tests the learning-curve runs instead of a phase
+(results/<m>/<ds>/learning_curve/<protocol>/<SIZE>/, splits <protocol>__<SIZE>_seed<fold>), one comparison per
+foundation model per size, against chemprop2 (with descriptors) unless --baseline says otherwise. BH spans every
+model x size in the call, so run one endpoint per call to correct within each endpoint:
+  <chemprop2-env>/bin/python scripts/wilcoxon_from_results.py --protocol custom --datasets caco2_time_sliding \
+      --learning-curve 500 1000 2743 6858 13716 --molformer-python <molformer-env>/bin/python \
+      --out wilcoxon_lc_caco2.csv
 """
 import argparse
 import importlib.util
@@ -68,6 +76,9 @@ def main():
     ap.add_argument("--workdir", default="wilcoxon_run", help="per-molecule files go here (keep them private)")
     ap.add_argument("--out", default="wilcoxon_results.csv")
     ap.add_argument("--no-brier", action="store_true", help="skip the Brier-score test for classification datasets")
+    ap.add_argument("--learning-curve", nargs="+", default=None, metavar="SIZE",
+                    help="test learning-curve runs at these training sizes (folder names under "
+                         "results/<m>/<ds>/learning_curve/<protocol>/) instead of --phase")
     args = ap.parse_args()
 
     root = Path(args.root).resolve()
@@ -76,15 +87,23 @@ def main():
     align = load_module("align_per_molecule.py")
     baseline_for = dict(item.split("=", 1) for item in args.baseline_for)
 
-    manifest, problems, excluded, corrected, alternatives = [], [], [], [], {}
+    manifest, problems, excluded, corrected, alternatives, not_run = [], [], [], [], {}, []
     brier_manifest, baseline_info = [], {}
-    for dataset in args.datasets:
-        inputs = workdir / "inputs" / dataset
-        for stale in inputs.glob("*.csv"):     # never let files from an earlier run into this manifest
+    sizes = args.learning_curve or [None]
+    for dataset, size in [(d, n) for d in args.datasets for n in sizes]:
+        # label by the size's digits (as collect_results.py does): the row name seeds the rank-metric chunking,
+        # so 500 / n00500 must give the same name and the same result
+        size_label = str(int("".join(c for c in size if c.isdigit()))) if size and any(c.isdigit() for c in size) else size
+        tag = dataset if size is None else f"{dataset} / n={size_label}"
+        inputs = workdir / "inputs" / dataset / (f"n{size}" if size is not None else "")
+        for stale in list(inputs.glob("*.csv")) + list(inputs.glob("alt_order/*.csv")):   # no files from earlier runs
             stale.unlink()
         cmd = [sys.executable, str(HERE / "align_per_molecule.py"), "--root", str(root), "--dataset", dataset,
                "--protocol", args.protocol, "--phase", args.phase,
-               "--out", str(workdir / "aligned" / dataset), "--wilcoxon-dir", str(inputs)]
+               "--out", str(workdir / "aligned" / dataset / (f"n{size}" if size is not None else "")),
+               "--wilcoxon-dir", str(inputs)]
+        if size is not None:
+            cmd += ["--learning-curve", str(size)]
         if args.config:
             cmd += ["--config", args.config]
         if args.methods:
@@ -92,22 +111,24 @@ def main():
         if args.molformer_python:
             cmd += ["--molformer-python", args.molformer_python]
         result = subprocess.run(cmd, capture_output=True, text=True)
-        print(f"\n######## {dataset}\n{result.stdout.strip()}")
+        print(f"\n######## {tag}\n{result.stdout.strip()}")
         if result.returncode != 0:
-            problems.append(f"{dataset}: align_per_molecule.py failed:\n{result.stderr.strip()[-800:]}")
+            problems.append(f"{tag}: align_per_molecule.py failed:\n{result.stderr.strip()[-800:]}")
             continue
         for marker in ("DATA MISMATCH", "UNEXPLAINED"):
             if marker in result.stdout:
-                problems.append(f"{dataset}: {marker} against the pipeline's _summary.json (see above)")
+                problems.append(f"{tag}: {marker} in the cross-checks (see above)")
         for line in result.stdout.splitlines():
             if "CORRECTED folds" in line:
-                corrected.append(f"{dataset}: {line.strip()}")
+                corrected.append(f"{tag}: {line.strip()}")
         incomplete = set()                   # any fold not aligned -> drop the whole method (no partial-fold tests)
         for line in result.stdout.splitlines():
             parts = line.split()
             if len(parts) > 3 and parts[2:4] == ["NOT", "ALIGNED"]:
                 incomplete.add(parts[0])
-                excluded.append(f"{dataset}: {parts[0]} fold {parts[1]} — {' '.join(parts[4:])[:140]}")
+                excluded.append(f"{tag}: {parts[0]} fold {parts[1]} — {' '.join(parts[4:])[:140]}")
+            elif len(parts) > 2 and parts[1] == "-" and parts[2] == "SKIP" and (not args.methods or parts[0] in args.methods):
+                not_run.append(f"{tag}: {parts[0]}")
 
         meta = json.loads((root / "cleaned" / f"{dataset}.meta.json").read_text())
         metric = args.metric or align.headline_metric(meta)
@@ -121,25 +142,32 @@ def main():
             baseline, choice = baseline_for[dataset], {"baseline_rule": "--baseline-for"}
         elif args.baseline != "auto":
             baseline, choice = args.baseline, {"baseline_rule": "--baseline"}
+        elif size is not None:
+            baseline, choice = "chemprop2", {"baseline_rule": "learning curve: fixed chemprop2 (with descriptors)"}
         else:
             baseline, choice = choose_baseline(root, dataset, args.protocol, args.phase, args.config, metric, align, usable)
         choice["baseline"] = baseline
         scores = (f"; validation chemprop2={choice['val_chemprop2']}, chemprop2_nofp={choice['val_chemprop2_nofp']}"
                   if "val_chemprop2" in choice else "")
-        print(f"  baseline for {dataset}: {baseline}  ({choice['baseline_rule']}{scores})")
+        print(f"  baseline for {tag}: {baseline}  ({choice['baseline_rule']}{scores})")
         is_classification = meta["task_type"] == "cls"
         for target, files in by_target.items():
-            label = dataset + (f" / {target}" if target else "")
+            label = tag + (f" / {target}" if target else "")
             if baseline not in files or baseline in incomplete:
                 problems.append(f"{label}: baseline {baseline} is not aligned on every fold — cannot compare")
                 continue
+            baseline_folds = set(pd.read_csv(files[baseline], usecols=["fold"]).fold)
             for method, path in files.items():
                 if method in CHEMPROP_VARIANTS or method in incomplete:
+                    continue
+                missing = sorted(baseline_folds - set(pd.read_csv(path, usecols=["fold"]).fold))
+                if missing:                  # a method missing a whole fold is dropped, never tested on fewer folds
+                    excluded.append(f"{label}: {method} has no results for folds {missing}")
                     continue
                 name = f"{label} / {method}"
                 row = {"name": name, "metric": metric, "baseline": str(files[baseline]), "candidate": str(path)}
                 manifest.append(row)
-                baseline_info[name] = choice
+                baseline_info[name] = {**choice, "train_size": size_label}
                 if is_classification and not args.no_brier:
                     brier_manifest.append({**row, "metric": "brier"})
                 alt = inputs / "alt_order" / path.name
@@ -150,13 +178,13 @@ def main():
         print("\nSTOPPED — fix these before running the test:\n  " + "\n  ".join(problems))
         sys.exit(1)
     if not manifest:
-        print("\nno comparisons to run")
+        print("\nno comparisons to run" + (" — no results found for: " + "; ".join(not_run) if not_run else ""))
         sys.exit(1)
     wp = load_module("wilcoxon_paired.py")
     out = Path(args.out).resolve()
     print(f"\n######## Wilcoxon: {len(manifest)} comparisons (BH across all of them)")
     table = run_family(manifest, alternatives, workdir, "manifest", wp)
-    for col in ("baseline", "baseline_rule", "val_metric", "val_chemprop2", "val_chemprop2_nofp"):
+    for col in ("baseline", "baseline_rule", "val_metric", "val_chemprop2", "val_chemprop2_nofp", "train_size"):
         table[col] = table["name"].map(lambda n: baseline_info[n].get(col))
     if brier_manifest:
         brier_alt = {n: {**r, "metric": "brier"} for n, r in alternatives.items() if n in {b["name"] for b in brier_manifest}}
@@ -180,7 +208,9 @@ def main():
         print("\nCorrected cells (the pipeline's reported metric for these was computed on mispaired rows; the "
               "recovered one is right):\n  " + "\n  ".join(corrected))
     if excluded:
-        print("\nExcluded (could not be aligned — re-run these cells with the current code):\n  " + "\n  ".join(excluded))
+        print("\nExcluded (could not be aligned or incomplete — re-run these cells):\n  " + "\n  ".join(excluded))
+    if not_run:
+        print("\nNo results found (not tested): " + "; ".join(not_run))
 
 
 def run_family(rows, alternatives, workdir, tag, wp):

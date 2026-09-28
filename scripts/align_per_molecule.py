@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """align_per_molecule.py — cross-method-aligned per-molecule results, for runs made BEFORE or AFTER the ids fix
-(or any mix), for the default and the HP-tuned (hp_final) phase.
+(or any mix), for the default and the HP-tuned (hp_final) phase, and for learning-curve runs.
 
 For one dataset + protocol + phase, for each method and fold it: recovers which cleaned-CSV row every saved
 prediction row is (the "id"), VERIFIES that mapping, averages the ensemble members BY MOLECULE, and writes
@@ -39,6 +39,11 @@ Cross-checks printed per method (and used by wilcoxon_from_results.py to stop):
   * recovered check: the metric from the recovered rows must equal that too, UNLESS a correction was applied
                      (bug-2 molformer, members from different code versions); such cells are flagged because the
                      pipeline's reported number for them was computed on mispaired rows.
+  Without a _summary.json (learning-curve runs) the recovered metric is checked against the raw files' own
+  positional metric instead, with the same exceptions.
+
+Learning curves: --learning-curve SIZE reads results/<m>/<ds>/learning_curve/<protocol>/SIZE/ and the splits
+<protocol>__SIZE_seed<fold> that run_learning_curve.py trained on (--phase is ignored).
 
 Usage (from the repo root):
   <chemprop2-env>/bin/python scripts/align_per_molecule.py --dataset caco2_time_sliding --protocol custom \
@@ -376,10 +381,22 @@ def write_wilcoxon_inputs(cells_by_method, ctx_base, wdir):
         raw = [by_seed[s]["raw_metric"] for s in seeds]
         corrected = [s for s in seeds if by_seed[s]["corrected"]]
         undecided = [s for s in seeds if by_seed[s]["ambiguous"]]
-        summary = ctx_base["root"] / "results" / method / ctx_base["dataset"] / ctx_base["protocol"] / \
-            ctx_base["phase"] / "_summary.json"
-        verdict = "no _summary.json to check against"
-        if summary.exists():
+        summary = ctx_base["phase_dir"](method) / "_summary.json"
+        if not summary.exists():
+            # no pipeline summary (e.g. learning-curve runs): recovered must equal the positional recomputation
+            # wherever no correction applied, i.e. the raw files pair rows with their own labels
+            unexplained = [s for s, a, b in zip(seeds, recovered, raw)
+                           if s not in corrected and s not in undecided and a == a and b == b and abs(a - b) >= 1e-6]
+            if unexplained:
+                verdict = f"UNEXPLAINED difference on folds {unexplained} vs the raw files' own metric — stop"
+            else:
+                verdict = "no _summary.json; recovered metric equals the raw files' own metric"
+                if corrected:
+                    verdict += (f" except CORRECTED folds {corrected} (raw {[round(raw[seeds.index(s)], 4) for s in corrected]}"
+                                f" -> recovered {[round(recovered[seeds.index(s)], 4) for s in corrected]})")
+            if undecided:
+                verdict += f"; order-UNDECIDABLE folds {undecided} (both orders exported)"
+        else:
             reported = json.loads(summary.read_text()).get("per_seed_am") or []
             if len(reported) == len(seeds):
                 data_ok = all(abs(a - b) < 1e-6 for a, b in zip(raw, reported) if b is not None and a == a)
@@ -420,6 +437,9 @@ def seed_config_dirs(base, phase_root, phase, config):
         missing = [s for s, d in mapping.items() if not any(d.glob(f"seed{s}_em*"))]
         return ({s: d for s, d in mapping.items() if s not in missing},
                 f"best_hp.json names configs with no results for folds {missing}" if missing else None)
+    if not config and any(base.glob("seed*_em*")):
+        # the default phase has no config level: default/seed<S>_em<E>
+        return {int(p.name.split("seed")[1].split("_em")[0]): base for p in base.glob("seed*_em*")}, None
     dirs = [p for p in base.iterdir() if p.is_dir() and not p.name.startswith("_") and (not config or p.name == config)]
     holders = {}
     for d in dirs:
@@ -437,6 +457,9 @@ def main():
     ap.add_argument("--protocol", default="custom")
     ap.add_argument("--phase", default="default", help="default or hp_final")
     ap.add_argument("--config", default=None, help="force one config dir name")
+    ap.add_argument("--learning-curve", default=None, metavar="SIZE",
+                    help="align learning-curve runs at this training size: results/<m>/<ds>/learning_curve/"
+                         "<protocol>/SIZE/, splits <protocol>__SIZE_seed<fold> (--phase is ignored)")
     ap.add_argument("--methods", nargs="+", default=ALL_METHODS)
     ap.add_argument("--seed", type=int, default=None, help="one fold/seed; default = every fold found")
     ap.add_argument("--root", default=".", help="repo root (has cleaned/ splits/ results/); default cwd")
@@ -452,24 +475,50 @@ def main():
     tcols = meta.get("target_columns") or [c for c in full.columns if c != "smiles"]
     out_dir = root / args.out
     out_dir.mkdir(parents=True, exist_ok=True)
+    def phase_root_of(method):
+        base = root / "results" / method / args.dataset
+        return base / "learning_curve" / args.protocol if args.learning_curve else base / args.protocol
+
+    def size_tag(method):
+        """The learning-curve folder for --learning-curve SIZE: the exact name, else the one folder whose digits
+        equal SIZE's (older code wrote e.g. n00500 for 500) — the same rule collect_results.py uses."""
+        lc_root = phase_root_of(method)
+        if (lc_root / args.learning_curve).is_dir() or not lc_root.is_dir():
+            return args.learning_curve
+        digits = lambda name: "".join(c for c in name if c.isdigit()).lstrip("0")
+        matches = [d.name for d in lc_root.iterdir() if d.is_dir() and digits(d.name) == digits(args.learning_curve)]
+        return matches[0] if len(matches) == 1 else args.learning_curve
+
+    def phase_dir_of(method):
+        return phase_root_of(method) / (size_tag(method) if args.learning_curve else args.phase)
+
+    def split_protocol_of(method):
+        return f"{args.protocol}__{size_tag(method)}" if args.learning_curve else args.protocol
+
     ctx_base = {"root": root, "dataset": args.dataset, "protocol": args.protocol, "phase": args.phase,
+                "phase_dir": phase_dir_of,
                 "full": full, "tcols": tcols, "metric": headline_metric(meta), "out_dir": out_dir,
                 "molformer_python": args.molformer_python}
 
     report, cells_by_method = [], {}
     for method in args.methods:
-        phase_root = root / "results" / method / args.dataset / args.protocol
-        base = phase_root / args.phase
+        phase_root, base = phase_root_of(method), phase_dir_of(method)
         if not base.exists():
-            report.append((method, "-", "SKIP", "no results dir")); continue
-        mapping, problem = seed_config_dirs(base, phase_root, args.phase, args.config)
+            have = sorted(d.name for d in phase_root.iterdir() if d.is_dir()) if args.learning_curve and phase_root.is_dir() else []
+            report.append((method, "-", "SKIP", f"no results dir {base.relative_to(root)}"
+                           + (f" (learning-curve sizes found: {', '.join(have)})" if have else ""))); continue
+        split_protocol = split_protocol_of(method)
+        mapping, problem = seed_config_dirs(base, phase_root, "learning_curve" if args.learning_curve else args.phase,
+                                            args.config)
         if problem:
             report.append((method, "-", "NOT ALIGNED", problem))
         for seed in sorted(mapping) if args.seed is None else [args.seed]:
             if seed not in mapping:
                 report.append((method, seed, "NOT ALIGNED", "no config dir for this fold")); continue
-            sub = root / "splits" / args.dataset / split_sub(args.protocol, seed)
-            ctx = {**ctx_base, "seed": seed,
+            sub = root / "splits" / args.dataset / split_sub(split_protocol, seed)
+            if not (sub / "test_idx.npy").exists():
+                report.append((method, seed, "NOT ALIGNED", f"no split {sub.relative_to(root)}")); continue
+            ctx = {**ctx_base, "seed": seed, "protocol": split_protocol,
                    "test_idx": np.asarray(np.load(sub / "test_idx.npy"), np.int64) if (sub / "test_idx.npy").exists() else None,
                    "val_idx": np.asarray(np.load(sub / "val_idx.npy"), np.int64) if (sub / "val_idx.npy").exists() else None}
             status, detail, result = align_cell(method, sorted(mapping[seed].glob(f"seed{seed}_em*")), ctx)
@@ -477,7 +526,8 @@ def main():
             if result is not None:
                 cells_by_method.setdefault(method, {})[seed] = result
 
-    print(f"\nAlignment report — {args.dataset} / {args.protocol} / {args.phase}\n" + "-" * 78)
+    where = f"learning curve n={args.learning_curve}" if args.learning_curve else args.phase
+    print(f"\nAlignment report — {args.dataset} / {args.protocol} / {where}\n" + "-" * 78)
     print(f"{'method':<16}{'seed':>5}  {'status':<12} detail")
     for method, seed, status, detail in report:
         print(f"{method:<16}{str(seed):>5}  {status:<12} {detail}")

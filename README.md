@@ -490,3 +490,23 @@ $PY scripts/wilcoxon_from_results.py --phase hp_final --protocol v2_astartes \
   `only aligned Chemprop variant` means the other variant was not run or is listed under *Excluded*.
 - **Warnings from the test itself** (`y_true disagrees`, `rows have no partner`) mean the two files do not
   describe the same test set — stop and check rather than ignoring.
+
+### Learning curve (per-molecule Wilcoxon at each training size)
+Same command with `--learning-curve` and the sizes you ran (the folder names under
+`results/<method>/<dataset>/learning_curve/custom/`). One command per endpoint, so the Benjamini-Hochberg
+correction spans that endpoint's models × sizes. The baseline is fixed to `chemprop2` (with descriptors).
+```bash
+$PY scripts/wilcoxon_from_results.py --protocol custom --datasets caco2_time_sliding \
+    --learning-curve 500 1000 2743 6858 13716 --molformer-python $MF --out wilcoxon_lc_caco2.csv
+$PY scripts/wilcoxon_from_results.py --protocol custom --datasets clint_hum_app_time_sliding \
+    --learning-curve 500 1000 1434 3584 7168 --molformer-python $MF --out wilcoxon_lc_clint.csv
+```
+- Works whether each size was run before or after the row-order fix, or a mix (sizes, folds and ensemble
+  members are recovered separately). Rows are named `<dataset> / n=<size> / <model>`; `train_size` is a column.
+- Give sizes as the numbers you ran; a folder named with extra characters (e.g. `n00500`) is found from `500`,
+  like `collect_results.py --learning-curve` does. If a size is not found, the output lists the sizes that exist.
+- Learning-curve folders have no `_summary.json`, so each method's recovered metric is checked against the raw
+  files' own metric instead (`recovered metric equals the raw files' own metric`). `UNEXPLAINED` stops the run.
+- A model missing a whole fold at a size, or not run at a size, is left out of that size's test and listed at
+  the end (*Excluded* / *No results found*); the other sizes are unaffected.
+- The full-window point is not a learning-curve run — it is your `--phase default` result.
