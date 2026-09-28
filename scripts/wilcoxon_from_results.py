@@ -19,7 +19,7 @@ Only the results CSV is meant to leave your side; the per-molecule files stay in
 
 Run from the repo root with the chemprop2 env python (needed so the chemprop row-order replay matches):
   <chemprop2-env>/bin/python scripts/wilcoxon_from_results.py --protocol custom \
-      --datasets caco2_time_sliding clint_hum_app_time_sliding --phase default \
+      --datasets mydata_sliding otherdata_sliding --phase hp_final \
       --molformer-python <molformer-env>/bin/python --out wilcoxon_results_time_sliding.csv
 
 One call per protocol (e.g. time sliding, scaffold v1, scaffold v2). Output columns per comparison: the one-sided
@@ -33,9 +33,9 @@ Learning curves: --learning-curve SIZE [SIZE ...] tests the learning-curve runs 
 (results/<m>/<ds>/learning_curve/<protocol>/<SIZE>/, splits <protocol>__<SIZE>_seed<fold>), one comparison per
 foundation model per size, against chemprop2 (with descriptors) unless --baseline says otherwise. BH spans every
 model x size in the call, so run one endpoint per call to correct within each endpoint:
-  <chemprop2-env>/bin/python scripts/wilcoxon_from_results.py --protocol custom --datasets caco2_time_sliding \
-      --learning-curve 500 1000 2743 6858 13716 --molformer-python <molformer-env>/bin/python \
-      --out wilcoxon_lc_caco2.csv
+  <chemprop2-env>/bin/python scripts/wilcoxon_from_results.py --protocol custom --datasets mydata_sliding \
+      --learning-curve 500 1000 2000 5000 --molformer-python <molformer-env>/bin/python \
+      --out wilcoxon_lc_mydata.csv
 """
 import argparse
 import importlib.util
@@ -70,7 +70,7 @@ def main():
                     help="'auto' (default): per dataset, the Chemprop variant with the better validation score; "
                          "or a method name to use for every dataset")
     ap.add_argument("--baseline-for", nargs="*", default=[], metavar="DATASET=METHOD",
-                    help="per-dataset baseline override, e.g. caco2_time_sliding=chemprop2_nofp")
+                    help="per-dataset baseline override, e.g. mydata_sliding=chemprop2_nofp")
     ap.add_argument("--metric", default=None, help="override the headline metric for all datasets")
     ap.add_argument("--molformer-python", default=None, help="molformer env python (needed for molformer rows)")
     ap.add_argument("--workdir", default="wilcoxon_run", help="per-molecule files go here (keep them private)")

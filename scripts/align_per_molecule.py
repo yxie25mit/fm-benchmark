@@ -46,8 +46,8 @@ Learning curves: --learning-curve SIZE reads results/<m>/<ds>/learning_curve/<pr
 <protocol>__SIZE_seed<fold> that run_learning_curve.py trained on (--phase is ignored).
 
 Usage (from the repo root):
-  <chemprop2-env>/bin/python scripts/align_per_molecule.py --dataset caco2_time_sliding --protocol custom \
-      --phase hp_final --out aligned_caco2 --wilcoxon-dir wilcoxon_inputs/caco2 \
+  <chemprop2-env>/bin/python scripts/align_per_molecule.py --dataset mydata_sliding --protocol custom \
+      --phase hp_final --out aligned_mydata --wilcoxon-dir wilcoxon_inputs/mydata \
       --molformer-python <molformer-env>/bin/python
 """
 import argparse

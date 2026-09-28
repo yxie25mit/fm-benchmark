@@ -493,13 +493,15 @@ $PY scripts/wilcoxon_from_results.py --phase hp_final --protocol v2_astartes \
 
 ### Learning curve (per-molecule Wilcoxon at each training size)
 Same command with `--learning-curve` and the sizes you ran (the folder names under
-`results/<method>/<dataset>/learning_curve/custom/`). One command per endpoint, so the Benjamini-Hochberg
-correction spans that endpoint's models × sizes. The baseline is fixed to `chemprop2` (with descriptors).
+`results/<method>/<dataset>/learning_curve/custom/`). Learning-curve runs always use the default
+hyperparameters, so no `--phase` is needed (it is ignored). One command per endpoint, so the
+Benjamini-Hochberg correction spans that endpoint's models × sizes. The baseline is fixed to `chemprop2`
+(with descriptors).
 ```bash
-$PY scripts/wilcoxon_from_results.py --protocol custom --datasets caco2_time_sliding \
-    --learning-curve 500 1000 2743 6858 13716 --molformer-python $MF --out wilcoxon_lc_caco2.csv
-$PY scripts/wilcoxon_from_results.py --protocol custom --datasets clint_hum_app_time_sliding \
-    --learning-curve 500 1000 1434 3584 7168 --molformer-python $MF --out wilcoxon_lc_clint.csv
+$PY scripts/wilcoxon_from_results.py --protocol custom --datasets mydata_sliding \
+    --learning-curve 500 1000 2000 5000 --molformer-python $MF --out wilcoxon_lc_mydata.csv
+$PY scripts/wilcoxon_from_results.py --protocol custom --datasets otherdata_sliding \
+    --learning-curve 500 1000 2000 --molformer-python $MF --out wilcoxon_lc_otherdata.csv
 ```
 - Works whether each size was run before or after the row-order fix, or a mix (sizes, folds and ensemble
   members are recovered separately). Rows are named `<dataset> / n=<size> / <model>`; `train_size` is a column.
