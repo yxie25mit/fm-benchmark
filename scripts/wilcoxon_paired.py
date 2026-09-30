@@ -24,7 +24,11 @@ The "unit" depends on the endpoint's metric:
                                molecule, so the test set is partitioned into
                                30 equal parts, the metric is computed within
                                each part, and the test runs on those 30 values
-                               (exactly the Chemprop paper's procedure).
+                               (the Chemprop paper's procedure). For ROC-AUC /
+                               PR-AUC the parts are class-stratified: positives
+                               and negatives are dealt out separately, so no part
+                               is single-class when a fold has >= 30 of each class
+                               (--random-chunks restores plain random parts).
 
 INPUT FORMAT
 ------------
@@ -164,7 +168,18 @@ def align(base, cand):
     return m[ok]
 
 
-def unit_errors(y, pred, metric, rng):
+def partition(y, metric, rng, stratified):
+    """N_PARTS index sets. For ROC-AUC / PR-AUC the classes are dealt out separately (stratified), so every part
+    gets an equal share of positives and none is left single-class — as long as the fold has >= N_PARTS of each
+    class. Random equal parts otherwise (and for Spearman)."""
+    if stratified and metric in ("roc-auc", "pr-auc"):
+        pos, neg = np.flatnonzero(y == 1), np.flatnonzero(y != 1)
+        order = np.concatenate([rng.permutation(pos), rng.permutation(neg)])
+        return [order[i::N_PARTS] for i in range(N_PARTS)]
+    return np.array_split(rng.permutation(len(y)), N_PARTS)
+
+
+def unit_errors(y, pred, metric, rng, stratified=True):
     """
     Per-unit 'error' values, sign-flipped so that lower is always better.
 
@@ -176,7 +191,7 @@ def unit_errors(y, pred, metric, rng):
         return e, "molecule"
 
     # Rank metrics: score within each of 30 partitions of this fold.
-    parts = np.array_split(rng.permutation(len(y)), N_PARTS)
+    parts = partition(y, metric, rng, stratified)
     if metric == "spearman":
         vals = [spearmanr(y[p], pred[p]).statistic if len(p) > 1 else np.nan
                 for p in parts]
@@ -197,7 +212,7 @@ def _row_key(m):
     return m["smiles"].astype(str) + "|" + m["y_true_b"].round(9).astype(str)
 
 
-def compare(base_path, cand_path, metric, name, seed=None, pool_folds=False):
+def compare(base_path, cand_path, metric, name, seed=None, pool_folds=False, stratified=True):
     """One paired test. When the same test molecule appears in more than one fold (scaffold seeds share test
     molecules; TDC folds share the whole test set), pooling folds would count it several times and the test
     would overstate the evidence. By default each molecule then contributes ONE unit: for MAE/RMSE/Brier its
@@ -213,6 +228,7 @@ def compare(base_path, cand_path, metric, name, seed=None, pool_folds=False):
     repeated = bool(m.groupby("_key").size().gt(1).any())
     dedup = repeated and not pool_folds
 
+    few_pos = []
     if dedup and metric in DECOMPOSABLE:
         per_row_b, _ = unit_errors(m.y_true_b.to_numpy(float), m.y_pred_b.to_numpy(float), metric, None)
         per_row_c, _ = unit_errors(m.y_true_b.to_numpy(float), m.y_pred_c.to_numpy(float), metric, None)
@@ -222,19 +238,22 @@ def compare(base_path, cand_path, metric, name, seed=None, pool_folds=False):
     elif dedup:
         g = m.groupby("_key", sort=True).agg(y=("y_true_b", "mean"), pb=("y_pred_b", "mean"), pc=("y_pred_c", "mean"))
         rng = np.random.default_rng(_seed_from(f"{name}|distinct", seed))
-        eb, _ = unit_errors(g.y.to_numpy(float), g.pb.to_numpy(float), metric, rng)
+        eb, _ = unit_errors(g.y.to_numpy(float), g.pb.to_numpy(float), metric, rng, stratified)
         rng = np.random.default_rng(_seed_from(f"{name}|distinct", seed))
-        ec, _ = unit_errors(g.y.to_numpy(float), g.pc.to_numpy(float), metric, rng)
+        ec, _ = unit_errors(g.y.to_numpy(float), g.pc.to_numpy(float), metric, rng, stratified)
+        few_pos = [0] if metric in ("roc-auc", "pr-auc") and min((g.y == 1).sum(), (g.y != 1).sum()) < N_PARTS else []
         unit = f"1/{N_PARTS} of distinct molecules (prediction averaged over the folds each is tested in)"
     else:
-        eb_all, ec_all, unit = [], [], None
+        eb_all, ec_all, unit, few_pos = [], [], None, []
         for fold, g in m.groupby("fold", sort=True):
             y = g.y_true_b.to_numpy(float)
             # Both models share one partition per fold, so the pairing is preserved.
             rng_fold = np.random.default_rng(_seed_from(f"{name}|fold={fold}", seed))
-            eb, unit = unit_errors(y, g.y_pred_b.to_numpy(float), metric, rng_fold)
+            eb, unit = unit_errors(y, g.y_pred_b.to_numpy(float), metric, rng_fold, stratified)
             rng_fold = np.random.default_rng(_seed_from(f"{name}|fold={fold}", seed))
-            ec, _ = unit_errors(y, g.y_pred_c.to_numpy(float), metric, rng_fold)
+            ec, _ = unit_errors(y, g.y_pred_c.to_numpy(float), metric, rng_fold, stratified)
+            if metric in ("roc-auc", "pr-auc") and min((y == 1).sum(), (y != 1).sum()) < N_PARTS:
+                few_pos.append(fold)
             eb_all.append(eb)
             ec_all.append(ec)
         eb, ec = np.concatenate(eb_all), np.concatenate(ec_all)
@@ -257,8 +276,10 @@ def compare(base_path, cand_path, metric, name, seed=None, pool_folds=False):
     stat, p = wilcoxon(ec, eb, alternative="less", zero_method="wilcox")
     # reverse direction: baseline better (lets you say "Chemprop is significantly better")
     _, p_rev = wilcoxon(ec, eb, alternative="greater", zero_method="wilcox")
+    note = (f"a fold has fewer than {N_PARTS} of one class: some parts are single-class and dropped"
+            if few_pos and stratified else "")
     row.update(statistic=float(stat), p_wilcoxon=float(p), p_baseline_better=float(p_rev),
-               median_delta=float(np.median(eb - ec)), note="")
+               median_delta=float(np.median(eb - ec)), note=note)
     return row
 
 
@@ -292,6 +313,9 @@ def main():
     ap.add_argument("--out", help="write results here as CSV")
     ap.add_argument("--seed", type=int, default=None,
                     help="override the partition seed (default: derived from --name)")
+    ap.add_argument("--random-chunks", action="store_true",
+                    help="old behaviour for ROC-AUC/PR-AUC: random (not class-stratified) 30 parts; only for "
+                         "reproducing earlier tables")
     ap.add_argument("--pool-folds", action="store_true",
                     help="old behaviour: pool rows of all folds even when folds share test molecules "
                          "(counts such molecules several times; only for reproducing earlier tables)")
@@ -302,7 +326,7 @@ def main():
         need = {"name", "metric", "baseline", "candidate"}
         if not need <= set(man.columns):
             sys.exit(f"manifest needs columns {sorted(need)}; found {list(man.columns)}")
-        rows = [compare(r.baseline, r.candidate, r.metric, r["name"], a.seed, a.pool_folds)
+        rows = [compare(r.baseline, r.candidate, r.metric, r["name"], a.seed, a.pool_folds, not a.random_chunks)
                 for _, r in man.iterrows()]
         res = pd.DataFrame(rows)
         res["q_bh"] = bh(res.p_wilcoxon)
@@ -312,7 +336,8 @@ def main():
     else:
         if not (a.baseline and a.candidate and a.metric):
             sys.exit("need --baseline, --candidate and --metric (or --manifest)")
-        res = pd.DataFrame([compare(a.baseline, a.candidate, a.metric, a.name, a.seed, a.pool_folds)])
+        res = pd.DataFrame([compare(a.baseline, a.candidate, a.metric, a.name, a.seed, a.pool_folds,
+                                    not a.random_chunks)])
 
     cols = ["name", "metric", "n_folds", "n_distinct", "n_units", "median_delta", "statistic", "p_wilcoxon"]
     cols += [c for c in ("q_bh", "significant", "p_baseline_better", "q_bh_baseline_better",

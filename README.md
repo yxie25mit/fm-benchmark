@@ -442,19 +442,19 @@ PY=$PIPELINE_CONDA_ENVS/chemprop2/bin/python
 MF=$PIPELINE_CONDA_ENVS/molformer/bin/python
 
 # Time sliding window (most people) — list every *_sliding dataset you tuned
-$PY scripts/wilcoxon_from_results.py --phase hp_final --protocol custom \
+$PY scripts/wilcoxon_from_results.py --share-columns --phase hp_final --protocol custom \
     --datasets mydata_sliding otherdata_sliding --molformer-python $MF --out wilcoxon_time_sliding.csv
 ```
 Only if you also ran HP tuning on these splits (one command each, never mix split types in one command):
 ```bash
 # Time chronological (single fold)
-$PY scripts/wilcoxon_from_results.py --phase hp_final --protocol custom \
+$PY scripts/wilcoxon_from_results.py --share-columns --phase hp_final --protocol custom \
     --datasets mydata_chrono otherdata_chrono --molformer-python $MF --out wilcoxon_time_chrono.csv
 # Scaffold v1 (preshuffle)
-$PY scripts/wilcoxon_from_results.py --phase hp_final --protocol v1_preshuffle \
+$PY scripts/wilcoxon_from_results.py --share-columns --phase hp_final --protocol v1_preshuffle \
     --datasets mydata otherdata --molformer-python $MF --out wilcoxon_scaffold_v1.csv
 # Scaffold v2 (astartes)
-$PY scripts/wilcoxon_from_results.py --phase hp_final --protocol v2_astartes \
+$PY scripts/wilcoxon_from_results.py --share-columns --phase hp_final --protocol v2_astartes \
     --datasets mydata otherdata --molformer-python $MF --out wilcoxon_scaffold_v2.csv
 ```
 - **Baseline:** per dataset, whichever of `chemprop2` / `chemprop2_nofp` has the better *validation* score in
@@ -464,11 +464,17 @@ $PY scripts/wilcoxon_from_results.py --phase hp_final --protocol v2_astartes \
   (ROC-AUC, PR-AUC, Spearman) per chunk (30 random chunks per fold). A molecule that is in the test set of
   several folds (scaffold seeds, repeated seeds on one fixed split) is averaged and counted once — otherwise
   it would be counted several times and p would come out too small. Time-split folds do not overlap, so
-  nothing changes there. `n_distinct` / `folds_share_molecules` show when this happened.
+  nothing changes there. `n_distinct` / `folds_share_molecules` (in the full table, `--workdir/full_results_private.csv`) show when this happened.
 - **Columns:** `p_wilcoxon` / `q_bh` / `significant` = foundation model *better* than Chemprop (the headline);
   `p_baseline_better` / `q_bh_baseline_better` = the reverse test, i.e. Chemprop significantly better.
   Classification datasets also get a Brier-score test (`brier_*` columns, its own BH family): it rewards
   calibrated probabilities as well as correct ranking, so it complements ROC-AUC rather than replacing it.
+- **ROC-AUC / PR-AUC chunks are class-stratified:** positives and negatives are dealt out separately into the 30
+  chunks, so no chunk is single-class (no dropped chunks, and `n_units` does not depend on class balance) as long
+  as each test fold has **at least 30 positives** (ideally 90 or more). With fewer, a `note` says so.
+- **Sharing results:** add `--share-columns` to write only the columns needed for the joint analysis (no
+  `n_units` / `n_rows` / `n_distinct` / `statistic` / `note`, which can reveal test-set size or class balance;
+  p/q rounded to 2 significant digits). The full table stays in `--workdir/full_results_private.csv`.
 - Per-molecule files are written under `--workdir` (default `wilcoxon_run/`) — keep them on your side.
 
 **What to check in the output**
@@ -498,9 +504,9 @@ hyperparameters, so no `--phase` is needed (it is ignored). One command per endp
 Benjamini-Hochberg correction spans that endpoint's models × sizes. The baseline is fixed to `chemprop2`
 (with descriptors).
 ```bash
-$PY scripts/wilcoxon_from_results.py --protocol custom --datasets mydata_sliding \
+$PY scripts/wilcoxon_from_results.py --share-columns --protocol custom --datasets mydata_sliding \
     --learning-curve 500 1000 2000 5000 --molformer-python $MF --out wilcoxon_lc_mydata.csv
-$PY scripts/wilcoxon_from_results.py --protocol custom --datasets otherdata_sliding \
+$PY scripts/wilcoxon_from_results.py --share-columns --protocol custom --datasets otherdata_sliding \
     --learning-curve 500 1000 2000 --molformer-python $MF --out wilcoxon_lc_otherdata.csv
 ```
 - Works whether each size was run before or after the row-order fix, or a mix (sizes, folds and ensemble

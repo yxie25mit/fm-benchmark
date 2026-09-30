@@ -49,6 +49,11 @@ import pandas as pd
 
 HERE = Path(__file__).resolve().parent
 CHEMPROP_VARIANTS = {"chemprop2", "chemprop2_nofp"}
+# what the joint analysis needs; no n_units / n_rows / n_distinct / statistic / note (they can reveal test-set size
+# or class balance), no validation scores
+SHARE_COLUMNS = ["name", "metric", "baseline", "train_size", "median_delta", "p_wilcoxon", "q_bh", "significant",
+                 "p_baseline_better", "q_bh_baseline_better", "brier_median_delta", "brier_p", "brier_q",
+                 "brier_p_baseline_better", "brier_q_baseline_better", "order_ambiguous", "conclusion_agrees"]
 
 
 def load_module(filename):
@@ -76,6 +81,9 @@ def main():
     ap.add_argument("--workdir", default="wilcoxon_run", help="per-molecule files go here (keep them private)")
     ap.add_argument("--out", default="wilcoxon_results.csv")
     ap.add_argument("--no-brier", action="store_true", help="skip the Brier-score test for classification datasets")
+    ap.add_argument("--share-columns", action="store_true",
+                    help="write only the columns needed for the joint analysis (no counts or statistics that could "
+                         "reveal test-set size or class balance), p/q rounded to 2 significant digits")
     ap.add_argument("--learning-curve", nargs="+", default=None, metavar="SIZE",
                     help="test learning-curve runs at these training sizes (folder names under "
                          "results/<m>/<ds>/learning_curve/<protocol>/) instead of --phase")
@@ -193,7 +201,20 @@ def main():
                          ("q_bh", "brier_q"), ("p_baseline_better", "brier_p_baseline_better"),
                          ("q_bh_baseline_better", "brier_q_baseline_better")):
             table[dst] = table["name"].map(brier[src])
-    table.to_csv(out, index=False)
+    if args.share_columns:
+        share = [c for c in SHARE_COLUMNS if c in table.columns]
+        shared = table[share].copy()
+        for c in shared.columns:
+            if c.startswith(("p_", "q_", "brier_p", "brier_q")) and shared[c].dtype.kind == "f":
+                shared[c] = shared[c].map(lambda v: float(f"{v:.2g}") if pd.notna(v) else v)
+            elif c.endswith("median_delta"):
+                shared[c] = shared[c].map(lambda v: float(f"{v:.3g}") if pd.notna(v) else v)
+        shared.to_csv(out, index=False)
+        table.to_csv(workdir / "full_results_private.csv", index=False)
+        print(f"--share-columns: wrote {len(share)} columns to {out}; the full table stays in "
+              f"{workdir / 'full_results_private.csv'} (do not send)")
+    else:
+        table.to_csv(out, index=False)
     cols = [c for c in ["name", "metric", "baseline", "n_folds", "n_distinct", "n_units", "median_delta", "p_wilcoxon",
                         "q_bh", "significant", "p_baseline_better", "q_bh_baseline_better", "brier_p", "brier_q",
                         "order_ambiguous", "note"] if c in table.columns]
